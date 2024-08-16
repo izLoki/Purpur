@@ -1,0 +1,1266 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: izLoki <izLoki011@gmail.com>
+Date: Fri, 16 Aug 2024 16:09:30 -0300
+Subject: [PATCH] Notrack and spigotsettings merge from 1.20.1
+
+
+diff --git a/src/main/java/net/minecraft/network/protocol/game/ClientboundSetPlayerTeamPacket.java b/src/main/java/net/minecraft/network/protocol/game/ClientboundSetPlayerTeamPacket.java
+index f8fe125f12a6a00899d1d6acfa448be882b81557..1f0b64c7a5e52fff9c0908804d842e3c61654bed 100644
+--- a/src/main/java/net/minecraft/network/protocol/game/ClientboundSetPlayerTeamPacket.java
++++ b/src/main/java/net/minecraft/network/protocol/game/ClientboundSetPlayerTeamPacket.java
+@@ -13,6 +13,7 @@ import net.minecraft.network.codec.StreamCodec;
+ import net.minecraft.network.protocol.Packet;
+ import net.minecraft.network.protocol.PacketType;
+ import net.minecraft.world.scores.PlayerTeam;
++import org.purpurmc.purpur.PurpurConfig;
+ 
+ public class ClientboundSetPlayerTeamPacket implements Packet<ClientGamePacketListener> {
+     public static final StreamCodec<RegistryFriendlyByteBuf, ClientboundSetPlayerTeamPacket> STREAM_CODEC = Packet.codec(
+@@ -205,7 +206,7 @@ public class ClientboundSetPlayerTeamPacket implements Packet<ClientGamePacketLi
+             ComponentSerialization.TRUSTED_STREAM_CODEC.encode(buf, this.displayName);
+             buf.writeByte(this.options);
+             buf.writeUtf(this.nametagVisibility);
+-            buf.writeUtf(!io.papermc.paper.configuration.GlobalConfiguration.get().collisions.enablePlayerCollisions ? "never" : this.collisionRule); // Paper - Configurable player collision
++            buf.writeUtf(PurpurConfig.disableCollisions ? "never" : this.collisionRule); // Paper - Configurable player collision
+             buf.writeEnum(this.color);
+             ComponentSerialization.TRUSTED_STREAM_CODEC.encode(buf, this.playerPrefix);
+             ComponentSerialization.TRUSTED_STREAM_CODEC.encode(buf, this.playerSuffix);
+diff --git a/src/main/java/net/minecraft/server/level/ChunkMap.java b/src/main/java/net/minecraft/server/level/ChunkMap.java
+index 30137c5d6a5416e9ccd95934d162ebc72516f37d..399eb3d1e548be3ac4cad62ca536fcd9720953f9 100644
+--- a/src/main/java/net/minecraft/server/level/ChunkMap.java
++++ b/src/main/java/net/minecraft/server/level/ChunkMap.java
+@@ -1,13 +1,9 @@
+ package net.minecraft.server.level;
+ 
+-import co.aikar.timings.Timing; // Paper
+ import com.google.common.collect.ImmutableList;
+ import com.google.common.collect.ImmutableList.Builder;
+ import com.google.common.collect.Iterables;
+-import com.google.common.collect.ComparisonChain; // Paper
+ import com.google.common.collect.Lists;
+-import com.google.common.collect.Queues;
+-import com.google.common.collect.Sets;
+ import com.mojang.datafixers.DataFixer;
+ import com.mojang.logging.LogUtils;
+ import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
+@@ -16,25 +12,20 @@ import it.unimi.dsi.fastutil.longs.Long2ByteMap;
+ import it.unimi.dsi.fastutil.longs.Long2ByteOpenHashMap;
+ import it.unimi.dsi.fastutil.longs.Long2LongMap;
+ import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
+-import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
+-import it.unimi.dsi.fastutil.longs.Long2ObjectMap.Entry;
+-import it.unimi.dsi.fastutil.longs.LongIterator;
+ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+ import it.unimi.dsi.fastutil.longs.LongSet;
+-import it.unimi.dsi.fastutil.objects.ObjectBidirectionalIterator;
+ import it.unimi.dsi.fastutil.objects.ObjectIterator;
+ import java.io.IOException;
+ import java.io.Writer;
+ import java.nio.file.Path;
+ import java.util.ArrayList;
+ import java.util.HashMap;
++import java.util.HashSet;
+ import java.util.Iterator;
+ import java.util.List;
+-import java.util.Locale;
+ import java.util.Map;
+ import java.util.Objects;
+ import java.util.Optional;
+-import java.util.Queue;
+ import java.util.Set;
+ import java.util.concurrent.CancellationException;
+ import java.util.concurrent.CompletableFuture;
+@@ -59,13 +50,11 @@ import net.minecraft.nbt.CompoundTag;
+ import net.minecraft.nbt.NbtException;
+ import net.minecraft.network.protocol.Packet;
+ import net.minecraft.network.protocol.game.ClientboundChunksBiomesPacket;
+-import net.minecraft.network.protocol.game.ClientboundSetChunkCacheCenterPacket;
+ import net.minecraft.server.level.progress.ChunkProgressListener;
+ import net.minecraft.server.network.ServerPlayerConnection;
+ import net.minecraft.util.CsvOutput;
+ import net.minecraft.util.Mth;
+ import net.minecraft.util.StaticCache2D;
+-import net.minecraft.util.profiling.ProfilerFiller;
+ import net.minecraft.util.thread.BlockableEventLoop;
+ import net.minecraft.util.thread.ProcessorHandle;
+ import net.minecraft.util.thread.ProcessorMailbox;
+@@ -78,7 +67,6 @@ import net.minecraft.world.level.GameRules;
+ import net.minecraft.world.level.chunk.ChunkAccess;
+ import net.minecraft.world.level.chunk.ChunkGenerator;
+ import net.minecraft.world.level.chunk.ChunkGeneratorStructureState;
+-import net.minecraft.world.level.chunk.ImposterProtoChunk;
+ import net.minecraft.world.level.chunk.LevelChunk;
+ import net.minecraft.world.level.chunk.LightChunkGetter;
+ import net.minecraft.world.level.chunk.ProtoChunk;
+@@ -87,7 +75,6 @@ import net.minecraft.world.level.chunk.status.ChunkStatus;
+ import net.minecraft.world.level.chunk.status.ChunkStep;
+ import net.minecraft.world.level.chunk.status.ChunkType;
+ import net.minecraft.world.level.chunk.status.WorldGenContext;
+-import net.minecraft.world.level.chunk.storage.ChunkSerializer;
+ import net.minecraft.world.level.chunk.storage.ChunkStorage;
+ import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
+ import net.minecraft.world.level.entity.ChunkStatusUpdateListener;
+@@ -96,16 +83,13 @@ import net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator;
+ import net.minecraft.world.level.levelgen.NoiseGeneratorSettings;
+ import net.minecraft.world.level.levelgen.RandomState;
+ import net.minecraft.world.level.levelgen.blending.BlendingData;
+-import net.minecraft.world.level.levelgen.structure.StructureStart;
+ import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager;
+ import net.minecraft.world.level.storage.DimensionDataStorage;
+ import net.minecraft.world.level.storage.LevelStorageSource;
+-import net.minecraft.world.phys.Vec3;
+-import org.apache.commons.lang3.mutable.MutableBoolean;
+-import org.slf4j.Logger;
+-
+-// CraftBukkit start
++import org.bukkit.craftbukkit.entity.CraftPlayer;
+ import org.bukkit.craftbukkit.generator.CustomChunkGenerator;
++import org.purpurmc.purpur.PurpurConfig;
++import org.slf4j.Logger;
+ // CraftBukkit end
+ 
+ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider, GeneratingChunkMap {
+@@ -876,6 +860,7 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+                         ServerPlayer entityplayer = (ServerPlayer) entity;
+ 
+                         this.updatePlayerStatus(entityplayer, true);
++                        if(PurpurConfig.disableFullTracking) return;
+                         ObjectIterator objectiterator = this.entityMap.values().iterator();
+ 
+                         while (objectiterator.hasNext()) {
+@@ -1101,6 +1086,7 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+         private final int range;
+         SectionPos lastSectionPos;
+         public final Set<ServerPlayerConnection> seenBy = new it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet<>(); // Paper - Perf: optimise map impl
++        public boolean removed;
+ 
+         // Paper start - optimise entity tracker
+         private long lastChunkUpdate = -1L;
+@@ -1298,15 +1284,104 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+             return this.scaledRange(i);
+         }
+ 
++        Set<ServerPlayer> lastTrackerCandidates;
++
+         public void updatePlayers(List<ServerPlayer> players) {
+-            Iterator iterator = players.iterator();
++            Set<ServerPlayer> oldTrackerCandidates = this.lastTrackerCandidates;
+ 
+-            while (iterator.hasNext()) {
+-                ServerPlayer entityplayer = (ServerPlayer) iterator.next();
++            if (PurpurConfig.disableFullTracking) {
++                if (this.removed) return;
++                this.removed = true;
++
++                this.entity.getBukkitEntity().getLocation().getWorld().getPlayers().forEach(player -> {
++                    ServerPlayer serverPlayer = ((CraftPlayer) player).getHandle();
++                    if (player.getUniqueId().equals(this.entity.getUUID()) || player.isOp() || player.hasMetadata("NPC"))
++                        return;
++
++                    this.removePlayer(serverPlayer);
++                });
++                return;
++            }
++
++            String trackType = this.entity.withinNoRange();
++
++            if (trackType.equalsIgnoreCase("NOTRACK") || trackType.equalsIgnoreCase("TRACKING DISABLED")) {
++                List<ServerPlayer> noRemove = new ArrayList<>();
++
++                if (oldTrackerCandidates != null) {
++                    for (ServerPlayer player : lastTrackerCandidates) {
++                        String trackPlayerType = player.withinNoRange();
++
++                        if (this.entity.getBukkitEntity().isOp() || player.getBukkitEntity().isOp() || !trackPlayerType.equalsIgnoreCase("NOTRACK") && !trackPlayerType.equalsIgnoreCase("TRACKING DISABLED")) {
++                            this.updatePlayer(player);
++                            continue;
++                        }
++
++                        noRemove.add(player);
++                    }
++
++                    this.lastTrackerCandidates = null;
++                }
++
++                if (players != null) {
++                    for (ServerPlayer player : players) {
++                        String trackPlayerType = player.withinNoRange();
++
++                        if (this.entity.getBukkitEntity().isOp() || !trackPlayerType.equalsIgnoreCase("NOTRACK") && !trackPlayerType.equalsIgnoreCase("TRACKING DISABLED")) {
++                            this.updatePlayer(player);
++                            continue;
++                        }
++
++                        noRemove.add(player);
++                    }
++                }
++
++                if (!noRemove.isEmpty()) noRemove.forEach(serverPlayer -> {
++                    if (serverPlayer.getName().equals(this.entity.getName())) return;
+ 
+-                this.updatePlayer(entityplayer);
++                    this.removePlayer(serverPlayer);
++                });
++
++
++                return;
+             }
+ 
++            this.lastTrackerCandidates = new HashSet<>(players);
++
++            if (players != null) {
++                for (ServerPlayer player : players) {
++                    String trackPlayerType = player.withinNoRange();
++
++                    if(trackType.equalsIgnoreCase("NPC") || (!trackPlayerType.equalsIgnoreCase("NOTRACK") && !trackPlayerType.equalsIgnoreCase("TRACKING DISABLED")) || (entity.getRocketAttachedToEntity() != null && entity.getRocketAttachedToEntity().getUUID().equals(player.getUUID()))) {
++                        this.updatePlayer(player);
++                        continue;
++                    }
++
++                    this.removePlayer(player);
++                }
++            }
++
++            if (oldTrackerCandidates == players) {
++                // this is likely the case.
++                // means there has been no range changes, so we can just use the above for tracking.
++                return;
++            }
++
++            // stuff could have been removed, so we need to check the trackedPlayers set
++            // for players that were removed
++
++            for (ServerPlayerConnection conn : this.seenBy.toArray(new ServerPlayerConnection[0])) { // avoid CME
++                if (players == null || !players.contains(conn.getPlayer())) {
++                    String trackPlayerType = conn.getPlayer().withinNoRange();
++
++                    if(trackType.equalsIgnoreCase("NPC") || !trackPlayerType.equalsIgnoreCase("NOTRACK") && !trackPlayerType.equalsIgnoreCase("TRACKING DISABLED")) {
++                        this.updatePlayer(conn.getPlayer());
++                        continue;
++                    }
++
++                    this.removePlayer(conn.getPlayer());
++                }
++            }
+         }
+     }
+ }
+diff --git a/src/main/java/net/minecraft/server/level/ServerLevel.java b/src/main/java/net/minecraft/server/level/ServerLevel.java
+index 2c15fc6e4f46c5873cc5ce67edf10b730a4e922e..c070885300fbdfda3a617750fefee719c6aa32ef 100644
+--- a/src/main/java/net/minecraft/server/level/ServerLevel.java
++++ b/src/main/java/net/minecraft/server/level/ServerLevel.java
+@@ -171,6 +171,7 @@ import net.minecraft.world.phys.shapes.BooleanOp;
+ import net.minecraft.world.phys.shapes.Shapes;
+ import net.minecraft.world.phys.shapes.VoxelShape;
+ import net.minecraft.world.ticks.LevelTicks;
++import org.purpurmc.purpur.PurpurConfig;
+ import org.slf4j.Logger;
+ import org.bukkit.Bukkit;
+ import org.bukkit.WeatherType;
+@@ -905,7 +906,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ca.spottedleaf.
+         //ProfilerFiller gameprofilerfiller = this.getProfiler(); // Purpur
+ 
+         //gameprofilerfiller.push("thunder"); // Purpur
+-        if (!this.paperConfig().environment.disableThunder && flag && this.isThundering() && this.spigotConfig.thunderChance > 0 && this.random.nextInt(this.spigotConfig.thunderChance) == 0) { // Spigot // Paper - Option to disable thunder
++        if (!PurpurConfig.disableFullTicks && !this.paperConfig().environment.disableThunder && flag && this.isThundering() && this.spigotConfig.thunderChance > 0 && this.random.nextInt(this.spigotConfig.thunderChance) == 0) { // Spigot // Paper - Option to disable thunder
+             BlockPos blockposition = this.findLightningTargetAround(this.getBlockRandomPos(j, 0, k, 15));
+ 
+             if (this.isRainingAt(blockposition)) {
+@@ -943,7 +944,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ca.spottedleaf.
+ 
+         //gameprofilerfiller.popPush("iceandsnow"); // Purpur
+ 
+-        if (!this.paperConfig().environment.disableIceAndSnow) { // Paper - Option to disable ice and snow
++        if (!PurpurConfig.disableFullTicks && !this.paperConfig().environment.disableIceAndSnow) { // Paper - Option to disable ice and snow
+         for (int l = 0; l < randomTickSpeed; ++l) {
+             if (this.random.nextInt(48) == 0) {
+                 this.tickPrecipitation(this.getBlockRandomPos(j, 0, k, 15));
+@@ -953,7 +954,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ca.spottedleaf.
+ 
+         //gameprofilerfiller.popPush("tickBlocks"); // Purpur
+         //timings.chunkTicksBlocks.startTiming(); // Paper // Purpur
+-        if (randomTickSpeed > 0) {
++        if (!PurpurConfig.disableFullTicks && randomTickSpeed > 0) {
+             this.optimiseRandomTick(chunk, randomTickSpeed); // Paper - optimise random ticking
+         }
+ 
+diff --git a/src/main/java/net/minecraft/server/level/ServerPlayer.java b/src/main/java/net/minecraft/server/level/ServerPlayer.java
+index f19c64d572c947ac8f44f7e25e170a32d4093961..9f4941f38950f59816ae0a2be883cb72b95307da 100644
+--- a/src/main/java/net/minecraft/server/level/ServerPlayer.java
++++ b/src/main/java/net/minecraft/server/level/ServerPlayer.java
+@@ -161,6 +161,7 @@ import net.minecraft.world.phys.Vec3;
+ import net.minecraft.world.scores.PlayerTeam;
+ import net.minecraft.world.scores.ScoreAccess;
+ import net.minecraft.world.scores.ScoreHolder;
++import org.purpurmc.purpur.PurpurConfig;
+ import org.slf4j.Logger;
+ import net.minecraft.world.Container;
+ import net.minecraft.world.InteractionHand;
+@@ -780,11 +781,15 @@ public class ServerPlayer extends net.minecraft.world.entity.player.Player imple
+             --this.invulnerableTime;
+         }
+ 
++        // Prisma start - Changed paper container config to own configurable PurpurConfig
+         // Paper start - Configurable container update tick rate
+         if (--containerUpdateDelay <= 0) {
+             this.containerMenu.broadcastChanges();
+-            containerUpdateDelay = this.level().paperConfig().tickRates.containerUpdate;
++            containerUpdateDelay = PurpurConfig.playerInventoryUpdateDelay;
++        } else {
++            if (containerUpdateDelay > PurpurConfig.playerInventoryUpdateDelay) containerUpdateDelay = PurpurConfig.playerInventoryUpdateDelay;
+         }
++        //Prisma end
+         // Paper end - Configurable container update tick rate
+         if (!this.level().isClientSide && this.containerMenu != this.inventoryMenu && (this.isImmobile() || !this.containerMenu.stillValid(this))) { // Paper - Prevent opening inventories when frozen
+             this.closeContainer(org.bukkit.event.inventory.InventoryCloseEvent.Reason.CANT_USE); // Paper - Inventory close reason
+diff --git a/src/main/java/net/minecraft/server/network/ServerGamePacketListenerImpl.java b/src/main/java/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+index 3c038a992083f96b6406e786c5bb1177c1fe4c51..cfc757324aad64d785281ab1231026578d7d401e 100644
+--- a/src/main/java/net/minecraft/server/network/ServerGamePacketListenerImpl.java
++++ b/src/main/java/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+@@ -193,6 +193,7 @@ import net.minecraft.world.phys.Vec3;
+ import net.minecraft.world.phys.shapes.BooleanOp;
+ import net.minecraft.world.phys.shapes.Shapes;
+ import net.minecraft.world.phys.shapes.VoxelShape;
++import org.purpurmc.purpur.PurpurConfig;
+ import org.slf4j.Logger;
+ 
+ // CraftBukkit start
+@@ -1965,6 +1966,12 @@ public class ServerGamePacketListenerImpl extends ServerCommonPacketListenerImpl
+                 } else {
+                     ServerGamePacketListenerImpl.LOGGER.warn("Rejecting UseItemOnPacket from {}: Location {} too far away from hit block {}.", new Object[]{this.player.getGameProfile().getName(), vec3d, blockposition});
+                 }
++
++                //Prisma start - force update player container if playerInventoryUpdateDelay is too high
++                if (player instanceof ServerPlayer && PurpurConfig.playerInventoryUpdateDelay > 3){
++                    ((ServerPlayer) player).containerMenu.broadcastChanges();
++                }
++                //Prisma end
+             }
+         }
+     }
+diff --git a/src/main/java/net/minecraft/server/players/PlayerList.java b/src/main/java/net/minecraft/server/players/PlayerList.java
+index 1b1008ffd544dcddc31238e10c06df0d7aa68793..d8734aad60ab0c0f566a226747f52a7115f943a9 100644
+--- a/src/main/java/net/minecraft/server/players/PlayerList.java
++++ b/src/main/java/net/minecraft/server/players/PlayerList.java
+@@ -102,6 +102,7 @@ import net.minecraft.world.phys.Vec3;
+ import net.minecraft.world.scores.DisplaySlot;
+ import net.minecraft.world.scores.Objective;
+ import net.minecraft.world.scores.PlayerTeam;
++import org.purpurmc.purpur.PurpurConfig;
+ import org.slf4j.Logger;
+ 
+ // CraftBukkit start
+@@ -971,6 +972,8 @@ public abstract class PlayerList {
+     }
+ 
+     public void tick() {
++        if (PurpurConfig.disablePingUpdates) return;
++
+         if (++this.sendAllPlayerInfoIn > 600) {
+             // CraftBukkit start
+             for (int i = 0; i < this.players.size(); ++i) {
+diff --git a/src/main/java/net/minecraft/world/entity/Entity.java b/src/main/java/net/minecraft/world/entity/Entity.java
+index 8bbe0cc1c0e8de5e28b782a0aa5c655a280a0dd4..3b057ece59389aff842f2772fca1d06dad0bb8a6 100644
+--- a/src/main/java/net/minecraft/world/entity/Entity.java
++++ b/src/main/java/net/minecraft/world/entity/Entity.java
+@@ -85,6 +85,7 @@ import net.minecraft.world.damagesource.DamageSource;
+ import net.minecraft.world.damagesource.DamageSources;
+ import net.minecraft.world.entity.item.ItemEntity;
+ import net.minecraft.world.entity.player.Player;
++import net.minecraft.world.entity.projectile.FireworkRocketEntity;
+ import net.minecraft.world.entity.projectile.Projectile;
+ import net.minecraft.world.entity.projectile.ProjectileDeflection;
+ import net.minecraft.world.entity.vehicle.Boat;
+@@ -131,6 +132,9 @@ import net.minecraft.world.phys.shapes.VoxelShape;
+ import net.minecraft.world.scores.PlayerTeam;
+ import net.minecraft.world.scores.ScoreHolder;
+ import net.minecraft.world.scores.Team;
++import org.bukkit.World;
++import org.bukkit.craftbukkit.entity.CraftArmorStand;
++import org.purpurmc.purpur.PurpurConfig;
+ import org.slf4j.Logger;
+ import org.bukkit.Bukkit;
+ import org.bukkit.Location;
+@@ -573,6 +577,106 @@ public abstract class Entity implements SyncedDataHolder, Nameable, EntityAccess
+     }
+     // Purpur end - copied from Mob - API for any mob to burn daylight
+ 
++    //Prisma start
++    private int trackTicks;
++    private String lastStatus;
++
++    public boolean isInNotrackZone(){
++        if (PurpurConfig.disableFullTracking) return true;
++        else if (PurpurConfig.disablePlayerTracking && this instanceof Player) return true;
++
++        World world = (World) this.level().getWorld();
++        Location location = new Location(world, this.getX(), this.getY(), this.getZ());
++        for (PurpurConfig.LocationData locationData : PurpurConfig.notrackLocations) {
++            if (!locationData.isEnabled() || !locationData.getInitLocation().getWorld().getName().equalsIgnoreCase(world.getName())) continue;
++
++            Location loc1 = locationData.firstLocation;
++            Location loc2 = locationData.secondLocation;
++
++            double x1 = loc1.getX();
++            double y1 = loc1.getY();
++            double z1 = loc1.getZ();
++
++            double x2 = loc2.getX();
++            double y2 = loc2.getY();
++            double z2 = loc2.getZ();
++
++            if ((location.getX() > x1) && (location.getY() > y1) && (location.getZ() > z1) && (location.getX() < x2) && (location.getY() < y2) && (location.getZ() < z2)) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++    public String withinNoRange() {
++        ++this.trackTicks;
++
++        if(this.lastStatus == null || this.trackTicks % 10 == 0) {
++            CraftEntity craftEntity = this.bukkitEntity;
++
++            if (this.bukkitEntity != null && craftEntity != null) {
++                if (craftEntity.hasMetadata("NPC")) {
++                    this.lastStatus = "NPC";
++                    return "NPC";
++                }
++
++                if (!this.passengers.isEmpty() || craftEntity.isInsideVehicle()) {
++                    this.lastStatus = "INSIDE VEHICLE";
++                    return "INSIDE VEHICLE";
++                }
++            }
++
++            if (this instanceof FireworkRocketEntity) {
++                this.lastStatus = "ROCKET";
++                return "ROCKET";
++            }
++
++            if (craftEntity instanceof CraftPlayer || craftEntity instanceof CraftArmorStand) {
++                if (PurpurConfig.disablePlayerTracking) {
++                    this.lastStatus = "TRACKING DISABLED";
++                    return "TRACKING DISABLED";
++                }
++
++                Location location = craftEntity.getLocation();
++
++                for (PurpurConfig.LocationData locationData : PurpurConfig.notrackLocations) {
++                    if (!locationData.isEnabled() || !locationData.getInitLocation().getWorld().getName().equalsIgnoreCase(craftEntity.getWorld().getName())) continue;
++
++                    Location loc1 = locationData.firstLocation;
++                    Location loc2 = locationData.secondLocation;
++
++                    double x1 = loc1.getX();
++                    double y1 = loc1.getY();
++                    double z1 = loc1.getZ();
++
++                    double x2 = loc2.getX();
++                    double y2 = loc2.getY();
++                    double z2 = loc2.getZ();
++
++                    if ((location.getX() > x1) && (location.getY() > y1) && (location.getZ() > z1) && (location.getX() < x2) && (location.getY() < y2) && (location.getZ() < z2)) {
++                        this.lastStatus = "NOTRACK";
++                        return "NOTRACK";
++                    }
++                }
++            }
++
++            this.lastStatus = PurpurConfig.disableFullTracking ? "TRACKING DISABLED" : "ALLOWED";
++            return PurpurConfig.disableFullTracking ? "TRACKING DISABLED" : "ALLOWED";
++        }
++
++        return this.lastStatus;
++    }
++
++    public boolean isImpulseRocket(){
++        return (this instanceof FireworkRocketEntity && ((FireworkRocketEntity) this).attachedToEntity != null);
++    }
++
++    public net.minecraft.world.entity.LivingEntity getRocketAttachedToEntity(){
++        if (!this.isImpulseRocket()) return null;
++        return ((FireworkRocketEntity)this).attachedToEntity;
++    }
++    //Prisma end
++
+     public Entity(EntityType<?> type, Level world) {
+         this.id = Entity.ENTITY_COUNTER.incrementAndGet();
+         this.passengers = ImmutableList.of();
+@@ -1733,6 +1837,7 @@ public abstract class Entity implements SyncedDataHolder, Nameable, EntityAccess
+     }
+ 
+     private void walkingStepSound(BlockPos pos, BlockState state) {
++        if (PurpurConfig.disableLaggySounds) return;
+         this.playStepSound(pos, state);
+         if (this.shouldPlayAmethystStepSound(state)) {
+             this.playAmethystStepSound();
+@@ -2368,6 +2473,17 @@ public abstract class Entity implements SyncedDataHolder, Nameable, EntityAccess
+ 
+     }
+ 
++    public boolean shouldHide(){
++        String trackingStatus = this.withinNoRange();
++
++        if (PurpurConfig.disableFullTracking) return true;
++        else if (PurpurConfig.disablePlayerTracking && this instanceof Player) return true;
++        else if (!this.getBukkitEntity().isOp() && (trackingStatus.equalsIgnoreCase("NOTRACK") || trackingStatus.equalsIgnoreCase("TRACKING DISABLED"))){
++            return true;
++        }
++        return false;
++    }
++
+     public boolean shouldRender(double cameraX, double cameraY, double cameraZ) {
+         double d3 = this.getX() - cameraX;
+         double d4 = this.getY() - cameraY;
+diff --git a/src/main/java/net/minecraft/world/entity/LivingEntity.java b/src/main/java/net/minecraft/world/entity/LivingEntity.java
+index 33d86a94b0678f32c87eaf562f2bbb2e63435a8d..3b00e8b866a83a8ef3b28e609a31e49d0db57614 100644
+--- a/src/main/java/net/minecraft/world/entity/LivingEntity.java
++++ b/src/main/java/net/minecraft/world/entity/LivingEntity.java
+@@ -132,6 +132,7 @@ import net.minecraft.world.phys.HitResult;
+ import net.minecraft.world.phys.Vec3;
+ import net.minecraft.world.scores.PlayerTeam;
+ import net.minecraft.world.scores.Scoreboard;
++import org.purpurmc.purpur.PurpurConfig;
+ import org.slf4j.Logger;
+ 
+ // CraftBukkit start
+@@ -1692,7 +1693,7 @@ public abstract class LivingEntity extends Entity implements Attackable {
+         target.knockback(0.5D, target.getX() - this.getX(), target.getZ() - this.getZ(), this, io.papermc.paper.event.entity.EntityKnockbackEvent.Cause.SHIELD_BLOCK); // CraftBukkit // Paper - fix attacker & knockback events
+     }
+ 
+-    private boolean checkTotemDeathProtection(DamageSource source) {
++    public boolean checkTotemDeathProtection(DamageSource source) {
+         if (source.is(DamageTypeTags.BYPASSES_INVULNERABILITY)) {
+             return false;
+         } else {
+@@ -1753,6 +1754,12 @@ public abstract class LivingEntity extends Entity implements Attackable {
+                 this.addEffect(new MobEffectInstance(MobEffects.FIRE_RESISTANCE, 800, 0), org.bukkit.event.entity.EntityPotionEffectEvent.Cause.TOTEM);
+                 // CraftBukkit end
+                 this.level().broadcastEntityEvent(this, (byte) 35);
++
++                //Prisma start - force update player container if playerInventoryUpdateDelay is too high
++                if (this instanceof ServerPlayer && PurpurConfig.playerInventoryUpdateDelay > 3){
++                    ((ServerPlayer) this).containerMenu.broadcastChanges();
++                }
++                //Prisma end
+             }
+ 
+             return !event.isCancelled();
+diff --git a/src/main/java/net/minecraft/world/entity/item/ItemEntity.java b/src/main/java/net/minecraft/world/entity/item/ItemEntity.java
+index c536c33719a64cde672241ccb3b565da2ad30d64..4b0fdab2a7a41f80d6864e06786d7f16ed8607a6 100644
+--- a/src/main/java/net/minecraft/world/entity/item/ItemEntity.java
++++ b/src/main/java/net/minecraft/world/entity/item/ItemEntity.java
+@@ -594,7 +594,9 @@ public class ItemEntity extends Entity implements TraceableEntity {
+ 
+     public void setItem(ItemStack stack) {
+         this.getEntityData().set(ItemEntity.DATA_ITEM, stack);
+-        this.despawnRate = this.level().paperConfig().entities.spawning.altItemDespawnRate.enabled ? this.level().paperConfig().entities.spawning.altItemDespawnRate.items.getOrDefault(stack.getItem(), this.level().spigotConfig.itemDespawnRate) : this.level().spigotConfig.itemDespawnRate; // Paper - Alternative item-despawn-rate
++        //Loki start - custom despawn rate if is in notrack
++        this.despawnRate = this.isInNotrackZone() ? 20*15 : this.level().spigotConfig.itemDespawnRate;
++        //Loki end
+         // Purpur start
+         if (level().purpurConfig.itemImmuneToCactus.contains(stack.getItem())) immuneToCactus = true;
+         if (level().purpurConfig.itemImmuneToExplosion.contains(stack.getItem())) immuneToExplosion = true;
+diff --git a/src/main/java/net/minecraft/world/entity/player/Player.java b/src/main/java/net/minecraft/world/entity/player/Player.java
+index 330b21946564e6a7b463a258c02fee3f91e0f057..49567ceae3bb8409914caa836830e4ab502412d0 100644
+--- a/src/main/java/net/minecraft/world/entity/player/Player.java
++++ b/src/main/java/net/minecraft/world/entity/player/Player.java
+@@ -113,6 +113,7 @@ import net.minecraft.world.phys.AABB;
+ import net.minecraft.world.phys.Vec3;
+ import net.minecraft.world.scores.PlayerTeam;
+ import net.minecraft.world.scores.Scoreboard;
++import org.purpurmc.purpur.PurpurConfig;
+ import org.slf4j.Logger;
+ import org.bukkit.craftbukkit.entity.CraftHumanEntity;
+ import org.bukkit.craftbukkit.event.CraftEventFactory;
+@@ -789,6 +790,8 @@ public abstract class Player extends LivingEntity {
+                 this.swing(InteractionHand.MAIN_HAND);
+             }
+ 
++            if (PurpurConfig.disableDropeableItems) return null;
++
+             double d0 = this.getEyeY() - 0.30000001192092896D;
+             // Paper start
+             ItemStack tmp = itemstack.copy();
+diff --git a/src/main/java/org/bukkit/craftbukkit/entity/CraftLivingEntity.java b/src/main/java/org/bukkit/craftbukkit/entity/CraftLivingEntity.java
+index 9add2ba364e80815ec9c530b984e1619b6607bb8..9f3e0b5bddf3d933ae163ffe36dc490ae488d985 100644
+--- a/src/main/java/org/bukkit/craftbukkit/entity/CraftLivingEntity.java
++++ b/src/main/java/org/bukkit/craftbukkit/entity/CraftLivingEntity.java
+@@ -83,6 +83,7 @@ import org.bukkit.potion.PotionType;
+ import org.bukkit.util.BlockIterator;
+ import org.bukkit.util.RayTraceResult;
+ import org.bukkit.util.Vector;
++import org.jetbrains.annotations.Nullable;
+ 
+ public class CraftLivingEntity extends CraftEntity implements LivingEntity {
+     private CraftEntityEquipment equipment;
+@@ -1201,4 +1202,19 @@ public class CraftLivingEntity extends CraftEntity implements LivingEntity {
+         this.getHandle().setShouldBurnInDay(shouldBurnInDay);
+     }
+     // Purpur end - API for any mob to burn daylight
++
++    @Override
++    public @Nullable Player getLastPlayerDamager() {
++        return this.getKiller();
++    }
++
++    @Override
++    public @Nullable LivingEntity getLastEntityDamager() {
++        return getHandle().getLastAttacker() == null ? null : getHandle().getLastAttacker().getBukkitLivingEntity();
++    }
++
++    @Override
++    public boolean checkForTotemProtection() {
++        return this.getHandle().checkTotemDeathProtection(this.getHandle().level().damageSources().generic());
++    }
+ }
+diff --git a/src/main/java/org/purpurmc/purpur/PurpurConfig.java b/src/main/java/org/purpurmc/purpur/PurpurConfig.java
+index 54abd6874a64c669fc22448849febc9ef7c0f95e..a04b778892adf9e5cda5081e7d95601c78d6efce 100644
+--- a/src/main/java/org/purpurmc/purpur/PurpurConfig.java
++++ b/src/main/java/org/purpurmc/purpur/PurpurConfig.java
+@@ -20,11 +20,14 @@ import net.minecraft.world.item.enchantment.Enchantment;
+ import net.minecraft.world.level.block.Block;
+ import net.minecraft.world.level.block.Blocks;
+ import org.bukkit.Bukkit;
++import org.bukkit.Location;
+ import org.bukkit.command.Command;
+ import org.bukkit.configuration.ConfigurationSection;
+ import org.bukkit.configuration.InvalidConfigurationException;
+ import org.bukkit.configuration.file.YamlConfiguration;
++import org.purpurmc.purpur.command.NoTrackCommand;
+ import org.purpurmc.purpur.command.PurpurCommand;
++import org.purpurmc.purpur.command.SpigotSettingsCommand;
+ import org.purpurmc.purpur.task.TPSBarTask;
+ 
+ import java.io.File;
+@@ -76,6 +79,8 @@ public class PurpurConfig {
+ 
+         commands = new HashMap<>();
+         commands.put("purpur", new PurpurCommand("purpur"));
++        commands.put("notrack", new NoTrackCommand("notrack"));
++        commands.put("spigotsettings", new SpigotSettingsCommand("spigotsettings"));
+ 
+         version = getInt("config-version", 35);
+         set("config-version", 35);
+@@ -214,6 +219,158 @@ public class PurpurConfig {
+         sleepNotPossible = getString("settings.messages.sleep-not-possible", sleepNotPossible);
+     }
+ 
++    //Primsa start
++    public static boolean disablePlayerTracking;
++    public static boolean disableFullTracking;
++    public static boolean disableCollisions;
++    public static boolean disableTileEntities;
++    public static boolean disablePingUpdates;
++    public static boolean disableFullTicks;
++    public static boolean disableDropeableItems;
++    public static boolean disableLaggySounds;
++    public static int playerInventoryUpdateDelay;
++
++    public static List<LocationData> notrackLocations;
++
++    public static class LocationData {
++
++        private String name;
++
++        public Location initLocation;
++
++        public Location firstLocation;
++        public Location secondLocation;
++
++        public int range, rangeY;
++
++        public boolean enabled = true;
++
++        public LocationData(String name, Location initLocation, Location firstLocation, Location secondLocation, int range, int rangeY, boolean enabled) {
++            this.name = name;
++
++            this.initLocation = initLocation;
++            this.firstLocation = firstLocation;
++            this.secondLocation = secondLocation;
++
++            this.range = range;
++            this.rangeY = rangeY;
++
++            this.enabled = enabled;
++        }
++
++        public int getRange() {
++            return range;
++        }
++
++        public int getRangeY() {
++            return rangeY;
++        }
++
++        public String getName() {
++            return name;
++        }
++
++        public Location getFirstLocation() {
++            return firstLocation;
++        }
++
++        public Location getInitLocation() {
++            return initLocation;
++        }
++
++        public Location getSecondLocation() {
++            return secondLocation;
++        }
++
++        public void setName(final String name) {
++            this.name = name;
++        }
++
++        public void setFirstLocation(final Location firstLocation) {
++            this.firstLocation = firstLocation;
++        }
++
++        public void setInitLocation(final Location initLocation) {
++            this.initLocation = initLocation;
++        }
++
++        public void setSecondLocation(final Location secondLocation) {
++            this.secondLocation = secondLocation;
++        }
++
++        public void setRange(final int range) {
++            this.range = range;
++        }
++
++        public void setRangeY(final int rangeY) {
++            this.rangeY = rangeY;
++        }
++
++        public boolean isEnabled() {
++            return enabled;
++        }
++
++        public void setEnabled(final boolean enabled) {
++            this.enabled = enabled;
++        }
++    }
++
++    private static void withinNoTrack() {
++        notrackLocations = new ArrayList<>();
++    }
++
++    public static Location getLocationData(String line) {
++        String[] args = line.split(",");
++
++        String world = args[0];
++        int x = Integer.parseInt(args[1]);
++        int y = Integer.parseInt(args[2]);
++        int z = Integer.parseInt(args[3]);
++
++        return new Location(Bukkit.getWorld(world), x, y, z);
++    }
++
++    public static String getLocationDataToString(Location location) {
++        return location.getWorld().getName() + "," + location.getBlockX() + "," + location.getBlockY() + "," + location.getBlockZ();
++    }
++
++    public static void saveAllLocations() {
++        config.set("notrack.locations", null);
++
++        notrackLocations.forEach(data -> saveLocationData(data, false));
++
++        try {
++            config.save(CONFIG_FILE);
++        } catch (Exception e) {
++            e.printStackTrace();
++        }
++    }
++
++    public static void saveLocationData(LocationData locationData, boolean save) {
++        config.set("notrack.locations." + locationData.getName() + ".range", locationData.getRange());
++        config.set("notrack.locations." + locationData.getName() + ".rangeY", locationData.getRangeY());
++        config.set("notrack.locations." + locationData.getName() + ".initLocation", getLocationDataToString(locationData.getInitLocation()));
++
++        if(save) {
++            try {
++                config.save(CONFIG_FILE);
++            } catch (Exception e) {
++                e.printStackTrace();
++            }
++        }
++    }
++
++    public static void calculateWithinNoTrack(LocationData locationData) {
++        if(locationData == null || locationData.getInitLocation() == null) return;
++
++        Location location = locationData.getInitLocation();
++
++        locationData.setFirstLocation(new Location(location.getWorld(), location.getX() - locationData.getRange(), location.getY() - locationData.getRangeY(), location.getZ() - locationData.getRange()));
++        locationData.setSecondLocation(new Location(location.getWorld(), location.getX() + locationData.getRange(), location.getY() + locationData.getRangeY(), location.getZ() + locationData.getRange()));
++    }
++
++    //Prisma end
++
+     public static String deathMsgRunWithScissors = "<player> slipped and fell on their shears";
+     public static String deathMsgStonecutter = "<player> has sawed themself in half";
+     private static void deathMessages() {
+diff --git a/src/main/java/org/purpurmc/purpur/command/NoTrackCommand.java b/src/main/java/org/purpurmc/purpur/command/NoTrackCommand.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..73a2a9644116e9f11d8ab10be7cac1b6e7a6a2ca
+--- /dev/null
++++ b/src/main/java/org/purpurmc/purpur/command/NoTrackCommand.java
+@@ -0,0 +1,162 @@
++package org.purpurmc.purpur.command;
++
++import java.util.Collections;
++import java.util.List;
++import java.util.stream.Collectors;
++import java.util.stream.Stream;
++import org.bukkit.ChatColor;
++import org.bukkit.Location;
++import org.bukkit.command.Command;
++import org.bukkit.command.CommandSender;
++import org.bukkit.entity.Player;
++import org.purpurmc.purpur.PurpurConfig;
++
++public class NoTrackCommand extends Command {
++
++    public NoTrackCommand(String name) {
++        super(name);
++        this.description = "Purpur notrack related commands";
++        this.usageMessage = "/notrack [set | remove | init | range | yrange] [name] [range] [rangeY]";
++        this.setPermission("bukkit.command.notrack");
++    }
++
++    @Override
++    public List<String> tabComplete(CommandSender sender, String alias, String[] args, Location location) throws IllegalArgumentException {
++        if (args.length == 1) {
++            return Stream.of("set", "remove", "range", "yrange", "init", "toggle")
++                .filter(arg -> arg.startsWith(args[0].toLowerCase()))
++                .collect(Collectors.toList());
++        }
++        return Collections.emptyList();
++    }
++
++    public void save(PurpurConfig.LocationData locationData) {
++        PurpurConfig.saveAllLocations();
++        if(locationData != null) PurpurConfig.calculateWithinNoTrack(locationData);
++    }
++
++    @Override
++    public boolean execute(CommandSender sender, String commandLabel, String[] args) {
++        if (!testPermission(sender)) return true;
++        Player player = (Player) sender;
++
++        if(args.length == 1) {
++            if(args[0].equalsIgnoreCase("list")) {
++                player.sendMessage(ChatColor.YELLOW + "List of NoTrack Regions:");
++                PurpurConfig.notrackLocations.forEach(locationData -> player.sendMessage(ChatColor.GREEN + " - " + ChatColor.LIGHT_PURPLE + locationData.getName() + " " + ChatColor.GRAY + "(Enabled: " + locationData.isEnabled() + ", Range Y: " + locationData.getRangeY() + ", Range X: " + locationData.getRange() + ", Init: " + locationData.getInitLocation().getX() + ", " + locationData.getInitLocation().getY() + ", " + locationData.getInitLocation().getZ() + ", " + locationData.getInitLocation().getWorld().getName()));
++                return true;
++            }
++        }
++
++        if(args.length == 4) {
++            if(args[0].equalsIgnoreCase("set")) {
++                String name = args[1];
++                int range = Integer.parseInt(args[2]), rangeY = Integer.parseInt(args[3]);
++
++                PurpurConfig.LocationData locationData = new PurpurConfig.LocationData(name, player.getLocation(), null, null, range, rangeY, true);
++                PurpurConfig.notrackLocations.add(locationData);
++
++                save(locationData);
++
++                player.sendMessage(ChatColor.GREEN + "Created a notrack system named " + name + ".");
++                return true;
++            }
++        }
++
++        if(args.length == 3) {
++            if(args[0].equalsIgnoreCase("yrange")) {
++                String name = args[1];
++
++                if(PurpurConfig.notrackLocations.stream().noneMatch(locationData -> locationData.getName().equalsIgnoreCase(name))) {
++                    player.sendMessage(ChatColor.RED + "No track system found with that name.");
++                    return true;
++                }
++
++                PurpurConfig.LocationData locationData = PurpurConfig.notrackLocations.stream().filter(data -> data.getName().equalsIgnoreCase(name)).findFirst().orElse(null);
++                locationData.setRangeY(Integer.parseInt(args[2]));
++
++                save(locationData);
++
++                player.sendMessage(ChatColor.GREEN + "Updated range location from " + name + " notrack system.");
++                return true;
++            }
++
++            if(args[0].equalsIgnoreCase("toggle")) {
++                String name = args[1];
++
++                if(PurpurConfig.notrackLocations.stream().noneMatch(locationData -> locationData.getName().equalsIgnoreCase(name))) {
++                    player.sendMessage(ChatColor.RED + "No track system found with that name.");
++                    return true;
++                }
++
++                PurpurConfig.LocationData locationData = PurpurConfig.notrackLocations.stream().filter(data -> data.getName().equalsIgnoreCase(name)).findFirst().orElse(null);
++                locationData.setEnabled(Boolean.parseBoolean(args[2]));
++
++                save(locationData);
++
++                player.sendMessage(ChatColor.GREEN + "Updated tracking status on " + name + " notrack system.");
++                return true;
++            }
++
++            if(args[0].equalsIgnoreCase("range")) {
++                String name = args[1];
++
++                if(PurpurConfig.notrackLocations.stream().noneMatch(locationData -> locationData.getName().equalsIgnoreCase(name))) {
++                    player.sendMessage(ChatColor.RED + "No track system found with that name.");
++                    return true;
++                }
++
++                PurpurConfig.LocationData locationData = PurpurConfig.notrackLocations.stream().filter(data -> data.getName().equalsIgnoreCase(name)).findFirst().orElse(null);
++                locationData.setRange(Integer.parseInt(args[2]));
++
++                save(locationData);
++
++                player.sendMessage(ChatColor.GREEN + "Updated range location from " + name + " notrack system.");
++                return true;
++            }
++        }
++
++        if(args.length == 2) {
++            if(args[0].equalsIgnoreCase("init")) {
++                String name = args[1];
++
++                if(PurpurConfig.notrackLocations.stream().noneMatch(locationData -> locationData.getName().equalsIgnoreCase(name))) {
++                    player.sendMessage(ChatColor.RED + "No track system found with that name.");
++                    return true;
++                }
++
++                PurpurConfig.LocationData locationData = PurpurConfig.notrackLocations.stream().filter(data -> data.getName().equalsIgnoreCase(name)).findFirst().orElse(null);
++                locationData.setInitLocation(player.getLocation());
++                save(locationData);
++
++                player.sendMessage(ChatColor.GREEN + "Updated init location from " + name + " notrack system.");
++                return true;
++            }
++
++            if(args[0].equalsIgnoreCase("remove")) {
++                String name = args[1];
++
++                if(PurpurConfig.notrackLocations.stream().noneMatch(locationData -> locationData.getName().equalsIgnoreCase(name))) {
++                    player.sendMessage(ChatColor.RED + "No track system found with that name.");
++                    return true;
++                }
++
++                PurpurConfig.notrackLocations.removeIf(locationData -> locationData.getName().equalsIgnoreCase(name));
++                save(null);
++
++                player.sendMessage(ChatColor.GREEN + "Deleted a notrack system named " + name + ".");
++                return true;
++            }
++        }
++
++        sender.sendMessage(ChatColor.LIGHT_PURPLE + "NoTrack Commands");
++        sender.sendMessage(ChatColor.YELLOW + "/notrack set <name> <range> <rangeY>");
++        sender.sendMessage(ChatColor.YELLOW + "/notrack remove <name>");
++        sender.sendMessage(ChatColor.YELLOW + "/notrack yrange <name> <yrange>");
++        sender.sendMessage(ChatColor.YELLOW + "/notrack range <name> <range>");
++        sender.sendMessage(ChatColor.YELLOW + "/notrack init <name>");
++        sender.sendMessage(ChatColor.YELLOW + "/notrack list");
++        sender.sendMessage(ChatColor.YELLOW + "/notrack toggle <name> <true|false>");
++        return true;
++    }
++}
+diff --git a/src/main/java/org/purpurmc/purpur/command/SpigotSettingsCommand.java b/src/main/java/org/purpurmc/purpur/command/SpigotSettingsCommand.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..288a52a592c009999e05f9cdec1ed9cdf7399be8
+--- /dev/null
++++ b/src/main/java/org/purpurmc/purpur/command/SpigotSettingsCommand.java
+@@ -0,0 +1,218 @@
++package org.purpurmc.purpur.command;
++
++import net.minecraft.server.level.ServerPlayer;
++import org.bukkit.Bukkit;
++import org.bukkit.ChatColor;
++import org.bukkit.Location;
++import org.bukkit.command.Command;
++import org.bukkit.command.CommandSender;
++import org.bukkit.craftbukkit.entity.CraftPlayer;
++import org.bukkit.entity.Player;
++import org.jetbrains.annotations.NotNull;
++import org.purpurmc.purpur.PurpurConfig;
++import java.util.Collections;
++import java.util.List;
++import java.util.stream.Collectors;
++import java.util.stream.Stream;
++
++public class SpigotSettingsCommand extends Command {
++
++    public SpigotSettingsCommand(String name) {
++        super(name);
++        this.description = "Purpur toggle settings related commands";
++        this.usageMessage = "/spigotsettings ";
++        this.setPermission("bukkit.command.spigotsettings");
++    }
++
++    @Override
++    public List<String> tabComplete(CommandSender sender, String alias, String[] args, Location location) throws IllegalArgumentException {
++        if (args.length == 1) {
++            return Stream.of("reset", "status", "togglePlayerTracking", "toggleDropeableItems", "toggleFullTracking", "togglePingUpdates", "toggleCollisions", "toggleTileEntities", "toggleFullTicks", "toggleLaggySounds", "setPlayerInventoryUpdateDelay")
++                .filter(arg -> arg.toLowerCase().startsWith(args[0].toLowerCase()))
++                .collect(Collectors.toList());
++        }
++        if (args.length == 2){
++            if (args[0].equalsIgnoreCase("setPlayerInventoryUpdateDelay")){
++                return Stream.of("DEFAULT", "NORMAL", "SLOW", "DISABLED")
++                    .filter(arg -> arg.toLowerCase().startsWith(args[1].toLowerCase()))
++                    .collect(Collectors.toList());
++            }
++        }
++        return Collections.emptyList();
++    }
++
++    public void resetSettings(CommandSender sender){
++        PurpurConfig.disablePlayerTracking = false;
++        PurpurConfig.disableFullTracking = false;
++        PurpurConfig.disablePingUpdates = false;
++        PurpurConfig.disableCollisions = false;
++        PurpurConfig.disableTileEntities = false;
++        PurpurConfig.disableFullTicks = false;
++        PurpurConfig.disableDropeableItems = false;
++        PurpurConfig.disableLaggySounds = false;
++        PurpurConfig.playerInventoryUpdateDelay = 1;
++
++        sender.sendMessage(ChatColor.GREEN + "All settings have been reset!");
++    }
++
++    public void sendStatusMessage(CommandSender sender){
++        sender.sendMessage(ChatColor.YELLOW + "PlayerTracking: " + (!PurpurConfig.disablePlayerTracking ? ChatColor.GREEN + "ON" : ChatColor.RED + "OFF"));
++        sender.sendMessage(ChatColor.YELLOW + "FullTracking: " + (!PurpurConfig.disableFullTracking ? ChatColor.GREEN + "ON" : ChatColor.RED + "OFF"));
++        sender.sendMessage(ChatColor.YELLOW + "PingUpdates: " + (!PurpurConfig.disablePingUpdates ? ChatColor.GREEN + "ON" : ChatColor.RED + "OFF"));
++        sender.sendMessage(ChatColor.YELLOW + "Collisions: " + (!PurpurConfig.disableCollisions ? ChatColor.GREEN + "ON" : ChatColor.RED + "OFF"));
++        sender.sendMessage(ChatColor.YELLOW + "TileEntities: " + (!PurpurConfig.disableTileEntities ? ChatColor.GREEN + "ON" : ChatColor.RED + "OFF"));
++        sender.sendMessage(ChatColor.YELLOW + "FullTicks: " + (!PurpurConfig.disableFullTicks ? ChatColor.GREEN + "ON" : ChatColor.RED + "OFF"));
++        sender.sendMessage(ChatColor.YELLOW + "DropeableItems: " + (!PurpurConfig.disableDropeableItems ? ChatColor.GREEN + "ON" : ChatColor.RED + "OFF"));
++        sender.sendMessage(ChatColor.YELLOW + "LaggySounds: " + (!PurpurConfig.disableLaggySounds ? ChatColor.GREEN + "ON" : ChatColor.RED + "OFF"));
++        sender.sendMessage(ChatColor.YELLOW + "PlayerInventoryUpdateDelay: " + ChatColor.GREEN + getCurrentEntityDelay());
++    }
++
++    public void sendToggleMessage(CommandSender sender, boolean enabled, String type) {
++        if (!enabled) {
++            sender.sendMessage(ChatColor.GREEN + "You have toggled " + type + " ON.");
++            return;
++        }
++
++        sender.sendMessage(ChatColor.RED + "You have toggled " + type + " OFF.");
++    }
++
++    @Override
++    public boolean execute(CommandSender sender, String commandLabel, String[] args) {
++        if (!testPermission(sender)) return true;
++
++        if(args.length >= 1) {
++            if (args[0].equalsIgnoreCase("reset")){
++                resetSettings(sender);
++                return true;
++            }
++
++            if (args[0].equalsIgnoreCase("status")){
++                sendStatusMessage(sender);
++                return true;
++            }
++
++            if(args[0].equalsIgnoreCase("togglePlayerTracking")) {
++                PurpurConfig.disablePlayerTracking = !PurpurConfig.disablePlayerTracking;
++
++                sendToggleMessage(sender, PurpurConfig.disablePlayerTracking, "player tracking");
++                return true;
++            }
++
++            if(args[0].equalsIgnoreCase("toggleFullTracking")) {
++                PurpurConfig.disableFullTracking = !PurpurConfig.disableFullTracking;
++
++                sendToggleMessage(sender, PurpurConfig.disableFullTracking, "full tracking");
++
++                for(Player player : Bukkit.getOnlinePlayers()) {
++                    ServerPlayer serverPlayer = ((CraftPlayer) player).getHandle();
++                    if(serverPlayer == null || serverPlayer.moonrise$getTrackedEntity() == null) continue;
++
++                    serverPlayer.moonrise$getTrackedEntity().removed = false;
++                }
++
++                return true;
++            }
++
++            if(args[0].equalsIgnoreCase("togglePingUpdates")) {
++                PurpurConfig.disablePingUpdates = !PurpurConfig.disablePingUpdates;
++
++                sendToggleMessage(sender, PurpurConfig.disablePingUpdates, "ping updates");
++                return true;
++            }
++
++            if(args[0].equalsIgnoreCase("toggleCollisions")) {
++                PurpurConfig.disableCollisions = !PurpurConfig.disableCollisions;
++
++                sendToggleMessage(sender, PurpurConfig.disableCollisions, "collisions");
++                return true;
++            }
++
++            if(args[0].equalsIgnoreCase("toggleTileEntities")) {
++                PurpurConfig.disableTileEntities = !PurpurConfig.disableTileEntities;
++
++                sendToggleMessage(sender, PurpurConfig.disableTileEntities, "tile entities");
++                return true;
++            }
++
++            if(args[0].equalsIgnoreCase("toggleFullTicks")) {
++                PurpurConfig.disableFullTicks = !PurpurConfig.disableFullTicks;
++
++                sendToggleMessage(sender, PurpurConfig.disableFullTicks, "full ticks");
++                return true;
++            }
++
++            if(args[0].equalsIgnoreCase("toggleDropeableItems")) {
++                PurpurConfig.disableDropeableItems = !PurpurConfig.disableDropeableItems;
++
++                sendToggleMessage(sender, PurpurConfig.disableDropeableItems, "item dropping");
++                return true;
++            }
++
++            if(args[0].equalsIgnoreCase("toggleLaggySounds")) {
++                PurpurConfig.disableLaggySounds = !PurpurConfig.disableLaggySounds;
++
++                sendToggleMessage(sender, PurpurConfig.disableLaggySounds, "laggy sounds");
++                return true;
++            }
++
++            if(args[0].equalsIgnoreCase("setPlayerInventoryUpdateDelay")) {
++                if (args.length < 2){
++                    String current = getCurrentEntityDelay();
++                    sender.sendMessage(ChatColor.GREEN + "Current inventory update: " + ChatColor.YELLOW + current);
++                    return true;
++                }
++
++                int newValue;
++                String s = args[1];
++                if (s.equalsIgnoreCase("DEFAULT")){
++                    newValue = 1;
++                } else if (s.equalsIgnoreCase("NORMAL")){
++                    newValue = 10;
++                } else if (s.equalsIgnoreCase("SLOW")){
++                    newValue = 30;
++                } else if (s.equalsIgnoreCase("DISABLED")){
++                    newValue = Integer.MAX_VALUE;
++                } else {
++                    try {
++                        newValue = Integer.parseInt(s);
++                    } catch (NumberFormatException ignore){
++                        sender.sendMessage(ChatColor.RED + "Usage: /spigotsettings setPlayerInventoryUpdateDelay [DEFAULT|NORMAL|SLOW|DISABLED]");
++                        return true;
++                    }
++                }
++
++                PurpurConfig.playerInventoryUpdateDelay = newValue;
++                sender.sendMessage(ChatColor.GREEN + "You have changed the value of PlayerInventoryUpdateDelay to " + ChatColor.YELLOW + getCurrentEntityDelay());
++                return true;
++            }
++        }
++
++        sender.sendMessage(ChatColor.LIGHT_PURPLE + "Spigot Settings Commands");
++        sender.sendMessage(ChatColor.YELLOW + "/spigotsettings status");
++        sender.sendMessage(ChatColor.YELLOW + "/spigotsettings reset");
++        sender.sendMessage(ChatColor.YELLOW + "/spigotsettings togglePlayerTracking");
++        sender.sendMessage(ChatColor.YELLOW + "/spigotsettings toggleFullTracking");
++        sender.sendMessage(ChatColor.YELLOW + "/spigotsettings togglePingUpdates");
++        sender.sendMessage(ChatColor.YELLOW + "/spigotsettings toggleCollisions");
++        sender.sendMessage(ChatColor.YELLOW + "/spigotsettings toggleTileEntities");
++        sender.sendMessage(ChatColor.YELLOW + "/spigotsettings toggleFullTicks");
++        sender.sendMessage(ChatColor.YELLOW + "/spigotsettings toggleDropeableItems");
++        sender.sendMessage(ChatColor.YELLOW + "/spigotsettings setPlayerInventoryUpdateDelay [DEFAULT|NORMAL|SLOW|DISABLED]");
++        return true;
++    }
++
++    @NotNull
++    private static String getCurrentEntityDelay() {
++        int delay = PurpurConfig.playerInventoryUpdateDelay;
++        if (delay == 1){
++            return "DEFAULT (1)";
++        } else if (delay == 10){
++            return "NORMAL (10)";
++        } else if (delay == 30) {
++            return "SLOW (30)";
++        } else if (delay == Integer.MAX_VALUE) {
++            return "DISABLED";
++        }
++        return delay + " (Custom)";
++    }
++}
+diff --git a/src/main/java/org/spigotmc/ActivationRange.java b/src/main/java/org/spigotmc/ActivationRange.java
+index 1e8100be8d443d43e99e0c5f777e20872f6e1a7f..c3cee268cf6f1c7fd1fc0d168a99786189c8ea31 100644
+--- a/src/main/java/org/spigotmc/ActivationRange.java
++++ b/src/main/java/org/spigotmc/ActivationRange.java
+@@ -38,6 +38,7 @@ import co.aikar.timings.MinecraftTimings;
+ import net.minecraft.world.entity.schedule.Activity;
+ import net.minecraft.world.level.Level;
+ import net.minecraft.world.phys.AABB;
++import org.purpurmc.purpur.PurpurConfig;
+ 
+ public class ActivationRange
+ {
+@@ -167,6 +168,9 @@ public class ActivationRange
+      */
+     public static void activateEntities(Level world)
+     {
++        //Prisma
++        if (PurpurConfig.disableFullTicks) if (MinecraftServer.currentTick % 10 != 0) return;
++
+         //MinecraftTimings.entityActivationCheckTimer.startTiming(); // Purpur
+         final int miscActivationRange = world.spigotConfig.miscActivationRange;
+         final int raiderActivationRange = world.spigotConfig.raiderActivationRange;
+diff --git a/src/main/java/org/spigotmc/TrackingRange.java b/src/main/java/org/spigotmc/TrackingRange.java
+index bb06f89a29f30144e7e2113e088a503db006a83c..438018742ea1612ea33551569c2894887cb2d5cd 100644
+--- a/src/main/java/org/spigotmc/TrackingRange.java
++++ b/src/main/java/org/spigotmc/TrackingRange.java
+@@ -55,4 +55,42 @@ public class TrackingRange
+             return config.otherTrackingRange;
+         }
+     }
++
++    public static TrackingRangeType getTrackingRangeType(Entity entity)
++    {
++        if (entity instanceof net.minecraft.world.entity.boss.enderdragon.EnderDragon) return TrackingRangeType.ENDERDRAGON; // Paper - enderdragon is exempt
++        if ( entity instanceof ServerPlayer )
++        {
++            return TrackingRangeType.PLAYER;
++            // Paper start - Simplify and set water mobs to animal tracking range
++        }
++        switch (entity.activationType) {
++            case RAIDER:
++            case MONSTER:
++            case FLYING_MONSTER:
++                return TrackingRangeType.MONSTER;
++            case WATER:
++            case VILLAGER:
++            case ANIMAL:
++                return TrackingRangeType.ANIMAL;
++            case MISC:
++        }
++        if ( entity instanceof ItemFrame || entity instanceof Painting || entity instanceof ItemEntity || entity instanceof ExperienceOrb )
++        // Paper end
++        {
++            return TrackingRangeType.MISC;
++        } else
++        {
++            return TrackingRangeType.OTHER;
++        }
++    }
++
++    public static enum TrackingRangeType {
++        PLAYER,
++        ANIMAL,
++        MONSTER,
++        MISC,
++        OTHER,
++        ENDERDRAGON;
++    }
+ }

@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: izLoki <izLoki011@gmail.com>
+Date: Fri, 16 Aug 2024 16:09:31 -0300
+Subject: [PATCH] Notrack and spigotsettings merge from 1.20.1
+
+
+diff --git a/src/main/java/org/bukkit/entity/LivingEntity.java b/src/main/java/org/bukkit/entity/LivingEntity.java
+index e492d3707e948cd3936f0f9c5eea4668fb1fe249..7e782928533e8a7be28bd15f6d139ee65dacbdb4 100644
+--- a/src/main/java/org/bukkit/entity/LivingEntity.java
++++ b/src/main/java/org/bukkit/entity/LivingEntity.java
+@@ -1474,4 +1474,15 @@ public interface LivingEntity extends Attributable, Damageable, ProjectileSource
+      */
+     void setShouldBurnInDay(boolean shouldBurnInDay);
+     // Purpur end - API for any mob to burn daylight
++
++    //Loki start
++
++    @Nullable
++    public Player getLastPlayerDamager();
++
++    @Nullable
++    public LivingEntity getLastEntityDamager();
++
++    public boolean checkForTotemProtection();
++    //Loki end
+ }
