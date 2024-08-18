@@ -1,0 +1,863 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: izLoki <izLoki011@gmail.com>
+Date: Sun, 18 Aug 2024 03:35:54 -0300
+Subject: [PATCH] started working on: notrack recode
+
+
+diff --git a/src/main/java/ca/spottedleaf/moonrise/patches/entity_tracker/EntityTrackerTrackedEntity.java b/src/main/java/ca/spottedleaf/moonrise/patches/entity_tracker/EntityTrackerTrackedEntity.java
+index 1fa07bef57d82c6d5242aaaf66011f0913515231..00f4093535f649c409e10e62f82670e9935b3b54 100644
+--- a/src/main/java/ca/spottedleaf/moonrise/patches/entity_tracker/EntityTrackerTrackedEntity.java
++++ b/src/main/java/ca/spottedleaf/moonrise/patches/entity_tracker/EntityTrackerTrackedEntity.java
+@@ -1,13 +1,17 @@
+ package ca.spottedleaf.moonrise.patches.entity_tracker;
+ 
+ import ca.spottedleaf.moonrise.common.misc.NearbyPlayers;
++import net.minecraft.server.level.ServerPlayer;
++import java.util.Set;
+ 
+ public interface EntityTrackerTrackedEntity {
+ 
+-    public void moonrise$tick(final NearbyPlayers.TrackedChunk chunk);
++    public Set<ServerPlayer> moonrise$tick(final NearbyPlayers.TrackedChunk chunk);
+ 
+     public void moonrise$removeNonTickThreadPlayers();
+ 
+     public void moonrise$clearPlayers();
+ 
++    public void moonrise$clearBothPlayers();
++
+ }
+diff --git a/src/main/java/net/minecraft/server/MinecraftServer.java b/src/main/java/net/minecraft/server/MinecraftServer.java
+index 6fb35c36d964c96a42911b8a9e11590aaa5cca59..585e854923586dd5975f135a2aaa01d266463c15 100644
+--- a/src/main/java/net/minecraft/server/MinecraftServer.java
++++ b/src/main/java/net/minecraft/server/MinecraftServer.java
+@@ -149,6 +149,8 @@ import net.minecraft.world.level.levelgen.WorldOptions;
+ import net.minecraft.world.level.levelgen.feature.ConfiguredFeature;
+ import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager;
+ import net.minecraft.world.level.storage.WorldData;
++import org.bukkit.configuration.file.FileConfiguration;
++import org.purpurmc.purpur.PurpurConfig;
+ import org.slf4j.Logger;
+ 
+ // CraftBukkit start
+@@ -1247,6 +1249,22 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+             final long actualDoneTimeMs = System.currentTimeMillis() - org.bukkit.craftbukkit.Main.BOOT_TIME.toEpochMilli(); // Paper - Add total time
+             LOGGER.info("Done ({})! For help, type \"help\"", String.format(java.util.Locale.ROOT, "%.3fs", actualDoneTimeMs / 1000.00D)); // Paper - Add total time
+             this.server.spark.enableBeforePlugins(); // Paper - spark
++
++            FileConfiguration config = PurpurConfig.config;
++
++            if (config.getConfigurationSection("notrack.locations") != null) {
++                String path = "notrack.locations.";
++
++                for (String subPath : config.getConfigurationSection("notrack.locations").getKeys(false)) {
++                    String fullPath = path + subPath;
++                    PurpurConfig.LocationData locationData = new PurpurConfig.LocationData(subPath, PurpurConfig.getLocationData(config.getString(fullPath + ".initLocation")), null, null, config.getInt(fullPath + ".range"), config.getInt(fullPath + ".rangeY"), config.getBoolean(fullPath + ".enabled", true));
++
++                    PurpurConfig.notrackLocations.add(locationData);
++                    PurpurConfig.calculateWithinNoTrack(locationData);
++                }
++            }
++
++
+             org.spigotmc.WatchdogThread.tick();
+             // Paper end - Improved Watchdog Support
+             org.spigotmc.WatchdogThread.hasStarted = true; // Paper
+diff --git a/src/main/java/net/minecraft/server/level/ChunkMap.java b/src/main/java/net/minecraft/server/level/ChunkMap.java
+index 018d2ec381ea4cb272ce2aaa95388bbe8b08678d..750a41e69fd10d12f912764e76f9687f82c53292 100644
+--- a/src/main/java/net/minecraft/server/level/ChunkMap.java
++++ b/src/main/java/net/minecraft/server/level/ChunkMap.java
+@@ -1,5 +1,6 @@
+ package net.minecraft.server.level;
+ 
++import ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerTrackedEntity;
+ import com.google.common.collect.ImmutableList;
+ import com.google.common.collect.ImmutableList.Builder;
+ import com.google.common.collect.Iterables;
+@@ -62,6 +63,7 @@ import net.minecraft.world.entity.Entity;
+ import net.minecraft.world.entity.EntityType;
+ import net.minecraft.world.entity.ai.village.poi.PoiManager;
+ import net.minecraft.world.entity.boss.EnderDragonPart;
++import net.minecraft.world.entity.projectile.FireworkRocketEntity;
+ import net.minecraft.world.level.ChunkPos;
+ import net.minecraft.world.level.GameRules;
+ import net.minecraft.world.level.chunk.ChunkAccess;
+@@ -864,18 +866,19 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+                         ServerPlayer entityplayer = (ServerPlayer) entity;
+ 
+                         this.updatePlayerStatus(entityplayer, true);
++
+                         if(PurpurConfig.disableFullTracking) return;
+                         ObjectIterator objectiterator = this.entityMap.values().iterator();
+ 
+                         while (objectiterator.hasNext()) {
+-                            ChunkMap.TrackedEntity playerchunkmap_entitytracker1 = (ChunkMap.TrackedEntity) objectiterator.next();
++                            final TrackedEntity trackedEntityy = (TrackedEntity) objectiterator.next();
++                            ChunkMap.TrackedEntity playerchunkmap_entitytracker1 = trackedEntityy;
+ 
+                             if (playerchunkmap_entitytracker1.entity != entityplayer) {
+                                 playerchunkmap_entitytracker1.updatePlayer(entityplayer);
+                             }
+                         }
+                     }
+-
+                 }
+             }
+         }
+@@ -905,6 +908,8 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+ 
+     // Paper start - optimise entity tracker
+     private void newTrackerTick() {
++        Set<TrackedEntity> toRemove = new HashSet<>();
++
+         final ca.spottedleaf.moonrise.common.misc.NearbyPlayers nearbyPlayers = ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getNearbyPlayers();
+         final ca.spottedleaf.moonrise.patches.chunk_system.level.entity.server.ServerEntityLookup entityLookup = (ca.spottedleaf.moonrise.patches.chunk_system.level.entity.server.ServerEntityLookup)((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getEntityLookup();;
+ 
+@@ -916,11 +921,28 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+             if (tracker == null) {
+                 continue;
+             }
+-            ((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerTrackedEntity)tracker).moonrise$tick(nearbyPlayers.getChunk(entity.chunkPosition()));
+-            tracker.serverEntity.sendChanges();
++            final boolean shouldTrack = entity.withinNoRange().shouldTrack();
++            ((EntityTrackerTrackedEntity) tracker).moonrise$tick(nearbyPlayers.getChunk(entity.chunkPosition()));
++
++            if (shouldTrack) {
++                tracker.serverEntity.sendChanges();
++            } else if (entity instanceof ServerPlayer) {
++                tracker.serverEntity.sendNecessaryPlayerChanges();
++            }
++
++            if (!shouldTrack){
++                toRemove.add(tracker);
++            }
+         }
+ 
+         // process unloads
++        for (TrackedEntity trackedEntity : toRemove) {
++            if (trackedEntity == null) {
++                continue;
++            }
++            ((ca.spottedleaf.moonrise.patches.entity_tracker.EntityTrackerTrackedEntity)trackedEntity).moonrise$clearBothPlayers();
++        }
++
+         final ca.spottedleaf.moonrise.common.list.ReferenceList<net.minecraft.world.entity.Entity> unloadedEntities = entityLookup.trackerUnloadedEntities;
+         final Entity[] unloadedEntitiesRaw = java.util.Arrays.copyOf(unloadedEntities.getRawDataUnchecked(), unloadedEntities.size());
+         unloadedEntities.clear();
+@@ -1097,17 +1119,18 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+         private ca.spottedleaf.moonrise.common.misc.NearbyPlayers.TrackedChunk lastTrackedChunk;
+ 
+         @Override
+-        public final void moonrise$tick(final ca.spottedleaf.moonrise.common.misc.NearbyPlayers.TrackedChunk chunk) {
++        public final Set<ServerPlayer> moonrise$tick(final ca.spottedleaf.moonrise.common.misc.NearbyPlayers.TrackedChunk chunk) {
++            Set<ServerPlayer> updatedPlayers = new HashSet<>();
+             if (chunk == null) {
+                 this.moonrise$clearPlayers();
+-                return;
++                return updatedPlayers;
+             }
+ 
+             final ca.spottedleaf.moonrise.common.list.ReferenceList<ServerPlayer> players = chunk.getPlayers(ca.spottedleaf.moonrise.common.misc.NearbyPlayers.NearbyMapType.VIEW_DISTANCE);
+ 
+             if (players == null) {
+                 this.moonrise$clearPlayers();
+-                return;
++                return updatedPlayers;
+             }
+ 
+             final long lastChunkUpdate = this.lastChunkUpdate;
+@@ -1120,7 +1143,9 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+ 
+             for (int i = 0, len = players.size(); i < len; ++i) {
+                 final ServerPlayer player = playersRaw[i];
+-                this.updatePlayer(player);
++                if (this.updatePlayer(player)) {
++                    updatedPlayers.add(player);
++                }
+             }
+ 
+             if (lastChunkUpdate != currChunkUpdate || lastTrackedChunk != chunk) {
+@@ -1132,6 +1157,8 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+                     }
+                 }
+             }
++
++            return updatedPlayers;
+         }
+ 
+         @Override
+@@ -1168,6 +1195,24 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+                 this.removePlayer(player);
+             }
+         }
++
++        @Override
++        public final void moonrise$clearBothPlayers() {
++            this.lastChunkUpdate = -1;
++            this.lastTrackedChunk = null;
++            if (this.seenBy.isEmpty()) {
++                return;
++            }
++            for (final ServerPlayerConnection conn : new java.util.ArrayList<>(this.seenBy)) {
++                ServerPlayer player = conn.getPlayer();
++                if (entity.isRocketOwner(player)) continue;
++                this.removePlayer(player);
++                final TrackedEntity trackedEntity = player.moonrise$getTrackedEntity();
++                if (this.entity instanceof ServerPlayer sp) {
++                    trackedEntity.removePlayer(sp);
++                }
++            }
++        }
+         // Paper end - optimise entity tracker
+ 
+         public TrackedEntity(final Entity entity, final int i, final int j, final boolean flag) {
+@@ -1185,6 +1230,40 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+             return this.entity.getId();
+         }
+ 
++        public boolean shouldSee(@Nullable TrackedEntity target) {
++            Entity e = this.entity;
++
++            //No players
++            if (!(e instanceof ServerPlayer p)) {
++                if (PurpurConfig.disableFullTracking) {
++                    if (e instanceof FireworkRocketEntity) return true;
++                    return false;
++                };
++
++                final Entity.TrackType trackType = e.withinNoRange();
++                return trackType.shouldTrack() || (target != null && target.entity.isOwnerAndRocket(e));
++            }
++
++            //Player
++
++            /*
++            //Target is not player and rocket
++            if (target != null && !(target.entity instanceof ServerPlayer) && !(target.entity instanceof FireworkRocketEntity)) {
++                if (PurpurConfig.disableFullTracking) return false;
++                return true;
++            }
++
++             */
++
++            if (PurpurConfig.disablePlayerTracking || PurpurConfig.disableFullTracking) {
++                //Check if player is updating their firework.
++                return target != null && target.entity.isOwnerAndRocket(e);
++            }
++
++            final Entity.TrackType trackType = e.withinNoRange();
++            return trackType.shouldTrack() || (target != null && target.entity.isOwnerAndRocket(e));
++        }
++
+         public void broadcast(Packet<?> packet) {
+             Iterator iterator = this.seenBy.iterator();
+ 
+@@ -1223,8 +1302,13 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+ 
+         }
+ 
+-        public void updatePlayer(ServerPlayer player) {
++        public boolean updatePlayer(ServerPlayer player) {
+             org.spigotmc.AsyncCatcher.catchOp("player tracker update"); // Spigot
++
++            if (!player.moonrise$getTrackedEntity().shouldSee(this)) {
++                return false;
++            }
++
+             if (player != this.entity) {
+                 // Paper start - remove allocation of Vec3D here
+                 // Vec3 vec3d = player.position().subtract(this.entity.position());
+@@ -1263,8 +1347,8 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+                 } else if (this.seenBy.remove(player.connection)) {
+                     this.serverEntity.removePairing(player);
+                 }
+-
+             }
++            return true;
+         }
+ 
+         private int scaledRange(int initialDistance) {
+@@ -1311,6 +1395,7 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+             return this.scaledRange(i);
+         }
+ 
++        @Nullable
+         Set<ServerPlayer> lastTrackerCandidates;
+ 
+         public void updatePlayers(List<ServerPlayer> players) {
+@@ -1322,7 +1407,7 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+ 
+                 this.entity.getBukkitEntity().getLocation().getWorld().getPlayers().forEach(player -> {
+                     ServerPlayer serverPlayer = ((CraftPlayer) player).getHandle();
+-                    if (player.getUniqueId().equals(this.entity.getUUID()) || player.isOp() || player.hasMetadata("NPC"))
++                    if (player.getUniqueId().equals(this.entity.getUUID()) || player.hasMetadata("NPC"))
+                         return;
+ 
+                     this.removePlayer(serverPlayer);
+@@ -1330,83 +1415,67 @@ public class ChunkMap extends ChunkStorage implements ChunkHolder.PlayerProvider
+                 return;
+             }
+ 
+-            String trackType = this.entity.withinNoRange();
++            if (!this.entity.withinNoRange().shouldTrack()) {
++                Set<ServerPlayer> toRemove = new HashSet<>();
+ 
+-            if (trackType.equalsIgnoreCase("NOTRACK") || trackType.equalsIgnoreCase("TRACKING DISABLED")) {
+-                List<ServerPlayer> noRemove = new ArrayList<>();
+-
+-                if (oldTrackerCandidates != null) {
++                if (lastTrackerCandidates != null) {
+                     for (ServerPlayer player : lastTrackerCandidates) {
+-                        String trackPlayerType = player.withinNoRange();
+-
+-                        if (this.entity.getBukkitEntity().isOp() || player.getBukkitEntity().isOp() || !trackPlayerType.equalsIgnoreCase("NOTRACK") && !trackPlayerType.equalsIgnoreCase("TRACKING DISABLED")) {
+-                            this.updatePlayer(player);
++                        if (this.updatePlayer(player)) {
+                             continue;
+                         }
+ 
+-                        noRemove.add(player);
++                        toRemove.add(player);
+                     }
+-
+-                    this.lastTrackerCandidates = null;
+                 }
+ 
++                this.lastTrackerCandidates = null;
++
+                 if (players != null) {
+                     for (ServerPlayer player : players) {
+-                        String trackPlayerType = player.withinNoRange();
+-
+-                        if (this.entity.getBukkitEntity().isOp() || !trackPlayerType.equalsIgnoreCase("NOTRACK") && !trackPlayerType.equalsIgnoreCase("TRACKING DISABLED")) {
+-                            this.updatePlayer(player);
++                        if (this.updatePlayer(player)) {
+                             continue;
+                         }
+ 
+-                        noRemove.add(player);
++                        toRemove.add(player);
+                     }
+                 }
+ 
+-                if (!noRemove.isEmpty()) noRemove.forEach(serverPlayer -> {
++                if (!toRemove.isEmpty()) toRemove.forEach(serverPlayer -> {
+                     if (serverPlayer.getName().equals(this.entity.getName())) return;
+ 
+                     this.removePlayer(serverPlayer);
+                 });
++            } else {
++                this.lastTrackerCandidates = new HashSet<>(players);
+ 
++                if (players != null) {
++                    for (ServerPlayer player : players) {
++                        if(this.updatePlayer(player)) {
++                            continue;
++                        }
+ 
+-                return;
+-            }
+-
+-            this.lastTrackerCandidates = new HashSet<>(players);
+-
+-            if (players != null) {
+-                for (ServerPlayer player : players) {
+-                    String trackPlayerType = player.withinNoRange();
+-
+-                    if(trackType.equalsIgnoreCase("NPC") || (!trackPlayerType.equalsIgnoreCase("NOTRACK") && !trackPlayerType.equalsIgnoreCase("TRACKING DISABLED")) || (entity.getRocketAttachedToEntity() != null && entity.getRocketAttachedToEntity().getUUID().equals(player.getUUID()))) {
+-                        this.updatePlayer(player);
+-                        continue;
++                        this.removePlayer(player);
+                     }
++                }
+ 
+-                    this.removePlayer(player);
++                if (oldTrackerCandidates == players) {
++                    // this is likely the case.
++                    // means there has been no range changes, so we can just use the above for tracking.
++                    return;
+                 }
+-            }
+ 
+-            if (oldTrackerCandidates == players) {
+-                // this is likely the case.
+-                // means there has been no range changes, so we can just use the above for tracking.
+-                return;
+-            }
++                // stuff could have been removed, so we need to check the trackedPlayers set
++                // for players that were removed
+ 
+-            // stuff could have been removed, so we need to check the trackedPlayers set
+-            // for players that were removed
++                for (ServerPlayerConnection conn : this.seenBy.toArray(new ServerPlayerConnection[0])) { // avoid CME
++                    if (players == null || !players.contains(conn.getPlayer())) {
+ 
+-            for (ServerPlayerConnection conn : this.seenBy.toArray(new ServerPlayerConnection[0])) { // avoid CME
+-                if (players == null || !players.contains(conn.getPlayer())) {
+-                    String trackPlayerType = conn.getPlayer().withinNoRange();
++                        if(this.updatePlayer(conn.getPlayer())) {
++                            continue;
++                        }
+ 
+-                    if(trackType.equalsIgnoreCase("NPC") || !trackPlayerType.equalsIgnoreCase("NOTRACK") && !trackPlayerType.equalsIgnoreCase("TRACKING DISABLED")) {
+-                        this.updatePlayer(conn.getPlayer());
+-                        continue;
++                        this.removePlayer(conn.getPlayer());
+                     }
+-
+-                    this.removePlayer(conn.getPlayer());
+                 }
+             }
+         }
+diff --git a/src/main/java/net/minecraft/server/level/ServerEntity.java b/src/main/java/net/minecraft/server/level/ServerEntity.java
+index dfd09004063a8d8d93357633c8d23b6acff67b73..4c040ff12624e59a28d65c08607766f964c7d734 100644
+--- a/src/main/java/net/minecraft/server/level/ServerEntity.java
++++ b/src/main/java/net/minecraft/server/level/ServerEntity.java
+@@ -290,6 +290,34 @@ public class ServerEntity {
+ 
+     }
+ 
++    public void sendNecessaryPlayerChanges() {
++        if (!(this.entity instanceof net.minecraft.world.entity.player.Player)) return;
++        if (this.forceStateResync || this.tickCount % this.updateInterval == 0 || this.entity.hasImpulse || this.entity.getEntityData().isDirty()) {
++            if (!this.entity.isPassenger()) {
++                if ((this.trackDelta || this.entity.hasImpulse || ((LivingEntity) this.entity).isFallFlying()) && this.tickCount > 0) {
++                    Vec3 vec3d1 = this.entity.getDeltaMovement();
++                    double d0 = vec3d1.distanceToSqr(this.lastSentMovement);
++
++                    if (d0 > 1.0E-7D || d0 > 0.0D && vec3d1.lengthSqr() == 0.0D) {
++                        this.lastSentMovement = vec3d1;
++                        Entity entity1 = this.entity;
++
++                        this.broadcast.accept(new ClientboundSetEntityMotionPacket(this.entity.getId(), this.lastSentMovement));
++                    }
++                }
++
++                this.sendDirtyEntityData();
++
++                this.wasRiding = false;
++            }
++
++            this.entity.hasImpulse = false;
++            this.forceStateResync = false;
++        }
++
++        ++this.tickCount;
++    }
++
+     private static Stream<Entity> removedPassengers(List<Entity> passengers, List<Entity> lastPassengers) {
+         return lastPassengers.stream().filter((entity) -> {
+             return !passengers.contains(entity);
+diff --git a/src/main/java/net/minecraft/server/level/ServerLevel.java b/src/main/java/net/minecraft/server/level/ServerLevel.java
+index 2c15fc6e4f46c5873cc5ce67edf10b730a4e922e..9817633e92f53150fdc4bd103117af53b8a0be2d 100644
+--- a/src/main/java/net/minecraft/server/level/ServerLevel.java
++++ b/src/main/java/net/minecraft/server/level/ServerLevel.java
+@@ -171,6 +171,7 @@ import net.minecraft.world.phys.shapes.BooleanOp;
+ import net.minecraft.world.phys.shapes.Shapes;
+ import net.minecraft.world.phys.shapes.VoxelShape;
+ import net.minecraft.world.ticks.LevelTicks;
++import org.purpurmc.purpur.PurpurConfig;
+ import org.slf4j.Logger;
+ import org.bukkit.Bukkit;
+ import org.bukkit.WeatherType;
+@@ -1712,12 +1713,12 @@ public class ServerLevel extends Level implements WorldGenLevel, ca.spottedleaf.
+     }
+ 
+     @Override
+-    public void playSeededSound(@Nullable Player source, double x, double y, double z, Holder<SoundEvent> sound, SoundSource category, float volume, float pitch, long seed) {
++    public void playSeededSound(@Nullable Entity source, double x, double y, double z, Holder<SoundEvent> sound, SoundSource category, float volume, float pitch, long seed) {
+         this.server.getPlayerList().broadcast(source, x, y, z, (double) ((SoundEvent) sound.value()).getRange(volume), this.dimension(), new ClientboundSoundPacket(sound, category, x, y, z, volume, pitch, seed));
+     }
+ 
+     @Override
+-    public void playSeededSound(@Nullable Player source, Entity entity, Holder<SoundEvent> sound, SoundSource category, float volume, float pitch, long seed) {
++    public void playSeededSound(@Nullable Entity source, Entity entity, Holder<SoundEvent> sound, SoundSource category, float volume, float pitch, long seed) {
+         this.server.getPlayerList().broadcast(source, entity.getX(), entity.getY(), entity.getZ(), (double) ((SoundEvent) sound.value()).getRange(volume), this.dimension(), new ClientboundSoundEntityPacket(sound, category, entity, volume, pitch, seed));
+     }
+ 
+diff --git a/src/main/java/net/minecraft/server/level/WorldGenRegion.java b/src/main/java/net/minecraft/server/level/WorldGenRegion.java
+index 1c059f4698cfe944ab21cb62f9f3ccb7f7065e08..64ab836a8ba1b38754d98c4be4b7ef8c7ef0e903 100644
+--- a/src/main/java/net/minecraft/server/level/WorldGenRegion.java
++++ b/src/main/java/net/minecraft/server/level/WorldGenRegion.java
+@@ -510,7 +510,7 @@ public class WorldGenRegion implements WorldGenLevel {
+     }
+ 
+     @Override
+-    public void playSound(@Nullable Player source, BlockPos pos, SoundEvent sound, SoundSource category, float volume, float pitch) {}
++    public void playSound(@Nullable Entity source, BlockPos pos, SoundEvent sound, SoundSource category, float volume, float pitch) {}
+ 
+     @Override
+     public void addParticle(ParticleOptions parameters, double x, double y, double z, double velocityX, double velocityY, double velocityZ) {}
+diff --git a/src/main/java/net/minecraft/server/players/PlayerList.java b/src/main/java/net/minecraft/server/players/PlayerList.java
+index d8734aad60ab0c0f566a226747f52a7115f943a9..c63269a8a5d33e43a696b5d5e780df05c30fcac7 100644
+--- a/src/main/java/net/minecraft/server/players/PlayerList.java
++++ b/src/main/java/net/minecraft/server/players/PlayerList.java
+@@ -1,6 +1,5 @@
+ package net.minecraft.server.players;
+ 
+-import co.aikar.timings.MinecraftTimings;
+ import com.google.common.collect.Lists;
+ import com.google.common.collect.Maps;
+ import com.google.common.collect.Sets;
+@@ -112,7 +111,6 @@ import org.bukkit.Location;
+ import org.bukkit.craftbukkit.CraftServer;
+ import org.bukkit.craftbukkit.CraftWorld;
+ import org.bukkit.craftbukkit.entity.CraftPlayer;
+-import org.bukkit.craftbukkit.util.CraftChatMessage;
+ import org.bukkit.craftbukkit.util.CraftLocation;
+ import org.bukkit.entity.Player;
+ import org.bukkit.event.entity.EntityRemoveEvent;
+@@ -120,9 +118,7 @@ import org.bukkit.event.player.PlayerChangedWorldEvent;
+ import org.bukkit.event.player.PlayerJoinEvent;
+ import org.bukkit.event.player.PlayerLoginEvent;
+ import org.bukkit.event.player.PlayerQuitEvent;
+-import org.bukkit.event.player.PlayerRespawnEvent;
+ import org.bukkit.event.player.PlayerRespawnEvent.RespawnReason;
+-import org.bukkit.event.player.PlayerSpawnChangeEvent;
+ // CraftBukkit end
+ 
+ public abstract class PlayerList {
+@@ -1201,17 +1197,22 @@ public abstract class PlayerList {
+         return this.playersByName.get(name.toLowerCase(java.util.Locale.ROOT)); // Spigot
+     }
+ 
+-    public void broadcast(@Nullable net.minecraft.world.entity.player.Player player, double x, double y, double z, double distance, ResourceKey<Level> worldKey, Packet<?> packet) {
++    public void broadcast(@Nullable Entity sender, double x, double y, double z, double distance, ResourceKey<Level> worldKey, Packet<?> packet) {
+         for (int i = 0; i < this.players.size(); ++i) {
+             ServerPlayer entityplayer = (ServerPlayer) this.players.get(i);
+ 
+             // CraftBukkit start - Test if player receiving packet can see the source of the packet
+-            if (player != null && !entityplayer.getBukkitEntity().canSee(player.getBukkitEntity())) {
++            if (sender != null && !entityplayer.getBukkitEntity().canSee(sender.getBukkitEntity())) {
+                continue;
+             }
+             // CraftBukkit end
+ 
+-            if (entityplayer != player && entityplayer.level().dimension() == worldKey) {
++            //Prisma start - check if player is in notrack zone
++            if (sender != null && sender.moonrise$getTrackedEntity() != null && entityplayer.moonrise$getTrackedEntity() != null && !entityplayer.moonrise$getTrackedEntity().shouldSee(sender.moonrise$getTrackedEntity())) {
++                continue;
++            }
++            //Prisma end
++            if (entityplayer != sender && entityplayer.level().dimension() == worldKey) {
+                 double d4 = x - entityplayer.getX();
+                 double d5 = y - entityplayer.getY();
+                 double d6 = z - entityplayer.getZ();
+diff --git a/src/main/java/net/minecraft/world/entity/Entity.java b/src/main/java/net/minecraft/world/entity/Entity.java
+index 187eed9f6f2d0a6642201d492cbc7a40ddc6b42e..fdec418ad06705402b7c838836801b609dba975d 100644
+--- a/src/main/java/net/minecraft/world/entity/Entity.java
++++ b/src/main/java/net/minecraft/world/entity/Entity.java
+@@ -133,12 +133,11 @@ import net.minecraft.world.scores.PlayerTeam;
+ import net.minecraft.world.scores.ScoreHolder;
+ import net.minecraft.world.scores.Team;
+ import org.bukkit.World;
+-import org.bukkit.craftbukkit.entity.CraftArmorStand;
++import org.bukkit.craftbukkit.entity.CraftFirework;
+ import org.purpurmc.purpur.PurpurConfig;
+ import org.slf4j.Logger;
+ import org.bukkit.Bukkit;
+ import org.bukkit.Location;
+-import org.bukkit.Server;
+ import org.bukkit.block.BlockFace;
+ import org.bukkit.command.CommandSender;
+ import org.bukkit.entity.Hanging;
+@@ -581,17 +580,32 @@ public abstract class Entity implements SyncedDataHolder, Nameable, EntityAccess
+     // Purpur end - copied from Mob - API for any mob to burn daylight
+ 
+     //Prisma start
++    public enum TrackType {
++        DEFAULT(true),
++        NPC(true),
++        INSIDE_VEHICLE(true),
++        NO_TRACK(false);
++
++        public boolean shouldTrack;
++
++        private TrackType(boolean shouldtrack) {
++            this.shouldTrack = shouldtrack;
++        }
++
++        public boolean shouldTrack() {
++            return shouldTrack;
++        }
++    }
++
+     private int trackTicks;
+-    private String lastStatus;
++    @Nullable
++    private TrackType lastStatus = null;
+ 
+     public boolean isInNotrackZone(){
+-        if (PurpurConfig.disableFullTracking) return true;
+-        else if (PurpurConfig.disablePlayerTracking && this instanceof Player) return true;
++        Location location = this.bukkitEntity.getLocation();
+ 
+-        World world = (World) this.level().getWorld();
+-        Location location = new Location(world, this.getX(), this.getY(), this.getZ());
+         for (PurpurConfig.LocationData locationData : PurpurConfig.notrackLocations) {
+-            if (!locationData.isEnabled() || !locationData.getInitLocation().getWorld().getName().equalsIgnoreCase(world.getName())) continue;
++            if (!locationData.isEnabled() || !locationData.getInitLocation().getWorld().getName().equalsIgnoreCase(this.bukkitEntity.getWorld().getName())) continue;
+ 
+             Location loc1 = locationData.firstLocation;
+             Location loc2 = locationData.secondLocation;
+@@ -611,69 +625,55 @@ public abstract class Entity implements SyncedDataHolder, Nameable, EntityAccess
+         return false;
+     }
+ 
+-    public String withinNoRange() {
++    public TrackType withinNoRange() {
+         ++this.trackTicks;
+ 
+-        if(this.lastStatus == null || this.trackTicks % 10 == 0) {
++        if(lastStatus == null || this.trackTicks % 10 == 0) {
+             CraftEntity craftEntity = this.bukkitEntity;
++            if (craftEntity == null) return TrackType.DEFAULT;
+ 
+-            if (this.bukkitEntity != null && craftEntity != null) {
+-                if (craftEntity.hasMetadata("NPC")) {
+-                    this.lastStatus = "NPC";
+-                    return "NPC";
+-                }
+-
+-                if (!this.passengers.isEmpty() || craftEntity.isInsideVehicle()) {
+-                    this.lastStatus = "INSIDE VEHICLE";
+-                    return "INSIDE VEHICLE";
+-                }
++            if (craftEntity.hasMetadata("NPC")) {
++                this.lastStatus = TrackType.NPC;
++                return lastStatus;
+             }
+ 
+-            if (this instanceof FireworkRocketEntity) {
+-                this.lastStatus = "ROCKET";
+-                return "ROCKET";
++            if (craftEntity.isInsideVehicle()) {
++                this.lastStatus = TrackType.INSIDE_VEHICLE;
++                return lastStatus;
+             }
+ 
+-            if (craftEntity instanceof CraftPlayer || craftEntity instanceof CraftArmorStand) {
++            if (craftEntity instanceof CraftPlayer) {
+                 if (PurpurConfig.disablePlayerTracking) {
+-                    this.lastStatus = "TRACKING DISABLED";
+-                    return "TRACKING DISABLED";
++                    this.lastStatus = TrackType.NO_TRACK;
++                    return TrackType.NO_TRACK;
+                 }
++            }
+ 
+-                Location location = craftEntity.getLocation();
+-
+-                for (PurpurConfig.LocationData locationData : PurpurConfig.notrackLocations) {
+-                    if (!locationData.isEnabled() || !locationData.getInitLocation().getWorld().getName().equalsIgnoreCase(craftEntity.getWorld().getName())) continue;
+-
+-                    Location loc1 = locationData.firstLocation;
+-                    Location loc2 = locationData.secondLocation;
+-
+-                    double x1 = loc1.getX();
+-                    double y1 = loc1.getY();
+-                    double z1 = loc1.getZ();
+-
+-                    double x2 = loc2.getX();
+-                    double y2 = loc2.getY();
+-                    double z2 = loc2.getZ();
+-
+-                    if ((location.getX() > x1) && (location.getY() > y1) && (location.getZ() > z1) && (location.getX() < x2) && (location.getY() < y2) && (location.getZ() < z2)) {
+-                        this.lastStatus = "NOTRACK";
+-                        return "NOTRACK";
+-                    }
+-                }
++            if (this.isInNotrackZone()) {
++                this.lastStatus = TrackType.NO_TRACK;
++                return this.lastStatus;
+             }
+ 
+-            this.lastStatus = PurpurConfig.disableFullTracking ? "TRACKING DISABLED" : "ALLOWED";
+-            return PurpurConfig.disableFullTracking ? "TRACKING DISABLED" : "ALLOWED";
++            this.lastStatus = PurpurConfig.disableFullTracking ? TrackType.NO_TRACK : TrackType.DEFAULT;
+         }
+ 
+         return this.lastStatus;
+     }
+ 
++    public boolean isRocketOwner(Entity entity) {
++        return this.getRocketAttachedToEntity() != null && this.getRocketAttachedToEntity().getUUID().equals(entity.getUUID());
++    }
++
++    public boolean isOwnerAndRocket(Entity entity) {
++        return (this.getRocketAttachedToEntity() != null && this.getRocketAttachedToEntity().getUUID().equals(entity.getUUID()))
++            || (entity.getRocketAttachedToEntity() != null && entity.getRocketAttachedToEntity().getUUID().equals(this.getUUID()));
++    }
++
+     public boolean isImpulseRocket(){
+         return (this instanceof FireworkRocketEntity && ((FireworkRocketEntity) this).attachedToEntity != null);
+     }
+ 
++    @Nullable
+     public net.minecraft.world.entity.LivingEntity getRocketAttachedToEntity(){
+         if (!this.isImpulseRocket()) return null;
+         return ((FireworkRocketEntity)this).attachedToEntity;
+@@ -2482,17 +2482,6 @@ public abstract class Entity implements SyncedDataHolder, Nameable, EntityAccess
+ 
+     }
+ 
+-    public boolean shouldHide(){
+-        String trackingStatus = this.withinNoRange();
+-
+-        if (PurpurConfig.disableFullTracking) return true;
+-        else if (PurpurConfig.disablePlayerTracking && this instanceof Player) return true;
+-        else if (!this.getBukkitEntity().isOp() && (trackingStatus.equalsIgnoreCase("NOTRACK") || trackingStatus.equalsIgnoreCase("TRACKING DISABLED"))){
+-            return true;
+-        }
+-        return false;
+-    }
+-
+     public boolean shouldRender(double cameraX, double cameraY, double cameraZ) {
+         double d3 = this.getX() - cameraX;
+         double d4 = this.getY() - cameraY;
+diff --git a/src/main/java/net/minecraft/world/entity/item/ItemEntity.java b/src/main/java/net/minecraft/world/entity/item/ItemEntity.java
+index 4b0fdab2a7a41f80d6864e06786d7f16ed8607a6..0ec44e12caefa22524329071e5f0f48b1ba2ed0a 100644
+--- a/src/main/java/net/minecraft/world/entity/item/ItemEntity.java
++++ b/src/main/java/net/minecraft/world/entity/item/ItemEntity.java
+@@ -595,7 +595,7 @@ public class ItemEntity extends Entity implements TraceableEntity {
+     public void setItem(ItemStack stack) {
+         this.getEntityData().set(ItemEntity.DATA_ITEM, stack);
+         //Loki start - custom despawn rate if is in notrack
+-        this.despawnRate = this.isInNotrackZone() ? 20*15 : this.level().spigotConfig.itemDespawnRate;
++        this.despawnRate = this.withinNoRange().shouldTrack() ? this.level().spigotConfig.itemDespawnRate : 20*15;
+         //Loki end
+         // Purpur start
+         if (level().purpurConfig.itemImmuneToCactus.contains(stack.getItem())) immuneToCactus = true;
+diff --git a/src/main/java/net/minecraft/world/entity/projectile/FireworkRocketEntity.java b/src/main/java/net/minecraft/world/entity/projectile/FireworkRocketEntity.java
+index 09d465947a5720e05c350d455c86002682104079..54f18713f48b747ccec42a38c4a1f10446dcd9dd 100644
+--- a/src/main/java/net/minecraft/world/entity/projectile/FireworkRocketEntity.java
++++ b/src/main/java/net/minecraft/world/entity/projectile/FireworkRocketEntity.java
+@@ -174,7 +174,7 @@ public class FireworkRocketEntity extends Projectile implements ItemSupplier {
+ 
+         this.updateRotation();
+         if (this.life == 0 && !this.isSilent()) {
+-            this.level().playSound((Player) null, this.getX(), this.getY(), this.getZ(), SoundEvents.FIREWORK_ROCKET_LAUNCH, SoundSource.AMBIENT, 3.0F, 1.0F);
++            this.level().playSound(this, this.getX(), this.getY(), this.getZ(), SoundEvents.FIREWORK_ROCKET_LAUNCH, SoundSource.AMBIENT, 3.0F, 1.0F);
+         }
+ 
+         ++this.life;
+diff --git a/src/main/java/net/minecraft/world/item/EggItem.java b/src/main/java/net/minecraft/world/item/EggItem.java
+index 7dc811335caa46870d1d895899a1e6c21980382d..b8bc7c8d73fe2090e1bce68e517ca1a77fd49909 100644
+--- a/src/main/java/net/minecraft/world/item/EggItem.java
++++ b/src/main/java/net/minecraft/world/item/EggItem.java
+@@ -37,7 +37,7 @@ public class EggItem extends Item implements ProjectileItem {
+                     ((net.minecraft.server.level.ServerPlayer) user).getBukkitEntity().updateInventory();
+                 }
+ 
+-                world.playSound((Player) null, user.getX(), user.getY(), user.getZ(), net.minecraft.sounds.SoundEvents.EGG_THROW, net.minecraft.sounds.SoundSource.PLAYERS, 0.5F, 0.4F / (net.minecraft.world.entity.Entity.SHARED_RANDOM.nextFloat() * 0.4F + 0.8F));
++                world.playSound(user, user.getX(), user.getY(), user.getZ(), net.minecraft.sounds.SoundEvents.EGG_THROW, net.minecraft.sounds.SoundSource.PLAYERS, 0.5F, 0.4F / (net.minecraft.world.entity.Entity.SHARED_RANDOM.nextFloat() * 0.4F + 0.8F));
+                 user.awardStat(Stats.ITEM_USED.get(this));
+             } else {
+                 if (user instanceof net.minecraft.server.level.ServerPlayer) {
+diff --git a/src/main/java/net/minecraft/world/level/Level.java b/src/main/java/net/minecraft/world/level/Level.java
+index 26fbc981ec9acafc7ba1753759375c142261b6ab..8f84750898b0072701e638407072fa624a8425f7 100644
+--- a/src/main/java/net/minecraft/world/level/Level.java
++++ b/src/main/java/net/minecraft/world/level/Level.java
+@@ -1343,44 +1343,32 @@ public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedl
+         return !this.dimensionType().hasFixedTime() && !this.isDay();
+     }
+ 
+-    public void playSound(@Nullable Entity source, BlockPos pos, SoundEvent sound, SoundSource category, float volume, float pitch) {
+-        Player entityhuman;
+-
+-        if (source instanceof Player entityhuman1) {
+-            entityhuman = entityhuman1;
+-        } else {
+-            entityhuman = null;
+-        }
+-
+-        this.playSound(entityhuman, pos, sound, category, volume, pitch);
+-    }
+-
+     @Override
+-    public void playSound(@Nullable Player source, BlockPos pos, SoundEvent sound, SoundSource category, float volume, float pitch) {
++    public void playSound(@Nullable Entity source, BlockPos pos, SoundEvent sound, SoundSource category, float volume, float pitch) {
+         this.playSound(source, (double) pos.getX() + 0.5D, (double) pos.getY() + 0.5D, (double) pos.getZ() + 0.5D, sound, category, volume, pitch);
+     }
+ 
+-    public abstract void playSeededSound(@Nullable Player source, double x, double y, double z, Holder<SoundEvent> sound, SoundSource category, float volume, float pitch, long seed);
++    public abstract void playSeededSound(@Nullable Entity source, double x, double y, double z, Holder<SoundEvent> sound, SoundSource category, float volume, float pitch, long seed);
+ 
+-    public void playSeededSound(@Nullable Player source, double x, double y, double z, SoundEvent sound, SoundSource category, float volume, float pitch, long seed) {
++    public void playSeededSound(@Nullable Entity source, double x, double y, double z, SoundEvent sound, SoundSource category, float volume, float pitch, long seed) {
+         this.playSeededSound(source, x, y, z, BuiltInRegistries.SOUND_EVENT.wrapAsHolder(sound), category, volume, pitch, seed);
+     }
+ 
+-    public abstract void playSeededSound(@Nullable Player source, Entity entity, Holder<SoundEvent> sound, SoundSource category, float volume, float pitch, long seed);
++    public abstract void playSeededSound(@Nullable Entity source, Entity entity, Holder<SoundEvent> sound, SoundSource category, float volume, float pitch, long seed);
+ 
+-    public void playSound(@Nullable Player source, double x, double y, double z, SoundEvent sound, SoundSource category) {
++    public void playSound(@Nullable Entity source, double x, double y, double z, SoundEvent sound, SoundSource category) {
+         this.playSound(source, x, y, z, sound, category, 1.0F, 1.0F);
+     }
+ 
+-    public void playSound(@Nullable Player source, double x, double y, double z, SoundEvent sound, SoundSource category, float volume, float pitch) {
++    public void playSound(@Nullable Entity source, double x, double y, double z, SoundEvent sound, SoundSource category, float volume, float pitch) {
+         this.playSeededSound(source, x, y, z, sound, category, volume, pitch, this.threadSafeRandom.nextLong());
+     }
+ 
+-    public void playSound(@Nullable Player source, double x, double y, double z, Holder<SoundEvent> sound, SoundSource category, float volume, float pitch) {
++    public void playSound(@Nullable Entity source, double x, double y, double z, Holder<SoundEvent> sound, SoundSource category, float volume, float pitch) {
+         this.playSeededSound(source, x, y, z, sound, category, volume, pitch, this.threadSafeRandom.nextLong());
+     }
+ 
+-    public void playSound(@Nullable Player source, Entity entity, SoundEvent sound, SoundSource category, float volume, float pitch) {
++    public void playSound(@Nullable Entity source, Entity entity, SoundEvent sound, SoundSource category, float volume, float pitch) {
+         this.playSeededSound(source, entity, BuiltInRegistries.SOUND_EVENT.wrapAsHolder(sound), category, volume, pitch, this.threadSafeRandom.nextLong());
+     }
+ 
+diff --git a/src/main/java/net/minecraft/world/level/LevelAccessor.java b/src/main/java/net/minecraft/world/level/LevelAccessor.java
+index 54d13eebc9b01e9d77f51011b7de95b80bc21669..327801684c9d9a99992e3ed07cac29b8463237ef 100644
+--- a/src/main/java/net/minecraft/world/level/LevelAccessor.java
++++ b/src/main/java/net/minecraft/world/level/LevelAccessor.java
+@@ -90,11 +90,11 @@ public interface LevelAccessor extends CommonLevelAccessor, LevelTimeAccess {
+         NeighborUpdater.executeShapeUpdate(this, direction, neighborState, pos, neighborPos, flags, maxUpdateDepth - 1);
+     }
+ 
+-    default void playSound(@Nullable Player except, BlockPos pos, SoundEvent sound, SoundSource category) {
++    default void playSound(@Nullable Entity except, BlockPos pos, SoundEvent sound, SoundSource category) {
+         this.playSound(except, pos, sound, category, 1.0F, 1.0F);
+     }
+ 
+-    void playSound(@Nullable Player source, BlockPos pos, SoundEvent sound, SoundSource category, float volume, float pitch);
++    void playSound(@Nullable Entity source, BlockPos pos, SoundEvent sound, SoundSource category, float volume, float pitch);
+ 
+     void addParticle(ParticleOptions parameters, double x, double y, double z, double velocityX, double velocityY, double velocityZ);
+ 
+diff --git a/src/main/java/org/bukkit/craftbukkit/util/DelegatedGeneratorAccess.java b/src/main/java/org/bukkit/craftbukkit/util/DelegatedGeneratorAccess.java
+index bf18f9ad7dec2b09ebfcb5ec6566f2556e842f22..c8f0fab0652f73017cba23e689c4a3fcbcaf86b3 100644
+--- a/src/main/java/org/bukkit/craftbukkit/util/DelegatedGeneratorAccess.java
++++ b/src/main/java/org/bukkit/craftbukkit/util/DelegatedGeneratorAccess.java
+@@ -195,12 +195,12 @@ public abstract class DelegatedGeneratorAccess implements WorldGenLevel {
+     }
+ 
+     @Override
+-    public void playSound(Player except, BlockPos pos, SoundEvent sound, SoundSource category) {
++    public void playSound(Entity except, BlockPos pos, SoundEvent sound, SoundSource category) {
+         this.handle.playSound(except, pos, sound, category);
+     }
+ 
+     @Override
+-    public void playSound(Player source, BlockPos pos, SoundEvent sound, SoundSource category, float volume, float pitch) {
++    public void playSound(Entity source, BlockPos pos, SoundEvent sound, SoundSource category, float volume, float pitch) {
+         this.handle.playSound(source, pos, sound, category, volume, pitch);
+     }
+ 
+diff --git a/src/main/java/org/bukkit/craftbukkit/util/DummyGeneratorAccess.java b/src/main/java/org/bukkit/craftbukkit/util/DummyGeneratorAccess.java
+index e8a73d34dbb372581b03018aade170a31c266099..7eb8fbd794b4c6841e5b4786872c746a65799e6c 100644
+--- a/src/main/java/org/bukkit/craftbukkit/util/DummyGeneratorAccess.java
++++ b/src/main/java/org/bukkit/craftbukkit/util/DummyGeneratorAccess.java
+@@ -104,7 +104,7 @@ public class DummyGeneratorAccess implements WorldGenLevel {
+     }
+ 
+     @Override
+-    public void playSound(Player source, BlockPos pos, SoundEvent sound, SoundSource category, float volume, float pitch) {
++    public void playSound(Entity source, BlockPos pos, SoundEvent sound, SoundSource category, float volume, float pitch) {
+         throw new UnsupportedOperationException("Not supported yet.");
+     }
+ 
