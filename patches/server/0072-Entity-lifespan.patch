@@ -5,10 +5,10 @@ Subject: [PATCH] Entity lifespan
 
 
 diff --git a/src/main/java/net/minecraft/server/network/ServerGamePacketListenerImpl.java b/src/main/java/net/minecraft/server/network/ServerGamePacketListenerImpl.java
-index 7a2bc00ee456caf48d3261f065fb1c9e760b813b..f71219cc6805c214a130643144c02332d0df5750 100644
+index dffb1f179e4b0526fc7223c8c6a356ce32ed6448..1d49dc7fa0bed6a001ea29c051025b3b24d13c04 100644
 --- a/src/main/java/net/minecraft/server/network/ServerGamePacketListenerImpl.java
 +++ b/src/main/java/net/minecraft/server/network/ServerGamePacketListenerImpl.java
-@@ -2748,6 +2748,7 @@ public class ServerGamePacketListenerImpl extends ServerCommonPacketListenerImpl
+@@ -2820,6 +2820,7 @@ public class ServerGamePacketListenerImpl extends ServerCommonPacketListenerImpl
              AABB axisalignedbb = entity.getBoundingBox();
  
              if (this.player.canInteractWithEntity(axisalignedbb, io.papermc.paper.configuration.GlobalConfiguration.get().misc.clientInteractionLeniencyDistance.or(1.0D))) { // Paper - configurable lenience value for interact range
@@ -17,7 +17,7 @@ index 7a2bc00ee456caf48d3261f065fb1c9e760b813b..f71219cc6805c214a130643144c02332
                      private void performInteraction(InteractionHand enumhand, ServerGamePacketListenerImpl.EntityInteraction playerconnection_a, PlayerInteractEntityEvent event) { // CraftBukkit
                          ItemStack itemstack = ServerGamePacketListenerImpl.this.player.getItemInHand(enumhand);
 diff --git a/src/main/java/net/minecraft/world/entity/Mob.java b/src/main/java/net/minecraft/world/entity/Mob.java
-index 9010da67e2a20c58195d8a49244d6850468fb153..3e148325f6fa9772134d2954abc39de6a5634e34 100644
+index b45cefa0455ee5634b0b719bf93f7ab728d63eb0..349e9121d72f572e3e54e98aea50489f02fa4522 100644
 --- a/src/main/java/net/minecraft/world/entity/Mob.java
 +++ b/src/main/java/net/minecraft/world/entity/Mob.java
 @@ -146,6 +146,7 @@ public abstract class Mob extends LivingEntity implements EquipmentUser, Leashab
@@ -85,7 +85,7 @@ index 9010da67e2a20c58195d8a49244d6850468fb153..3e148325f6fa9772134d2954abc39de6
      }
  
      @Override
-@@ -1749,6 +1777,7 @@ public abstract class Mob extends LivingEntity implements EquipmentUser, Leashab
+@@ -1756,6 +1784,7 @@ public abstract class Mob extends LivingEntity implements EquipmentUser, Leashab
              this.playAttackSound();
          }
  
