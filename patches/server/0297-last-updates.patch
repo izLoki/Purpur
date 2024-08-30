@@ -321,7 +321,7 @@ index ceb9c794345922772a69a867a96531167e881d24..eae7075b1daff502171b52cb80b6f1eb
          if (!this.level().isClientSide && this.containerMenu != this.inventoryMenu && (this.isImmobile() || !this.containerMenu.stillValid(this))) { // Paper - Prevent opening inventories when frozen
              this.closeContainer(org.bukkit.event.inventory.InventoryCloseEvent.Reason.CANT_USE); // Paper - Inventory close reason
 diff --git a/src/main/java/net/minecraft/server/network/ServerGamePacketListenerImpl.java b/src/main/java/net/minecraft/server/network/ServerGamePacketListenerImpl.java
-index d7356a57de9c706de78c146ba93310c4dd30f41e..6f73c5b01990af80dc079f4e7ed76c2c29022d1d 100644
+index 50b4e3fb244b8bac1a6a6d90aaf3b4be075b2500..e96314d91f8695f9cf4517920598b259bba49dd3 100644
 --- a/src/main/java/net/minecraft/server/network/ServerGamePacketListenerImpl.java
 +++ b/src/main/java/net/minecraft/server/network/ServerGamePacketListenerImpl.java
 @@ -193,6 +193,7 @@ import net.minecraft.world.phys.Vec3;
@@ -332,7 +332,7 @@ index d7356a57de9c706de78c146ba93310c4dd30f41e..6f73c5b01990af80dc079f4e7ed76c2c
  import org.slf4j.Logger;
  
  // CraftBukkit start
-@@ -1966,6 +1967,12 @@ public class ServerGamePacketListenerImpl extends ServerCommonPacketListenerImpl
+@@ -2042,6 +2043,12 @@ public class ServerGamePacketListenerImpl extends ServerCommonPacketListenerImpl
                  } else {
                      ServerGamePacketListenerImpl.LOGGER.warn("Rejecting UseItemOnPacket from {}: Location {} too far away from hit block {}.", new Object[]{this.player.getGameProfile().getName(), vec3d, blockposition});
                  }
@@ -346,7 +346,7 @@ index d7356a57de9c706de78c146ba93310c4dd30f41e..6f73c5b01990af80dc079f4e7ed76c2c
          }
      }
 diff --git a/src/main/java/net/minecraft/server/players/PlayerList.java b/src/main/java/net/minecraft/server/players/PlayerList.java
-index 1b1008ffd544dcddc31238e10c06df0d7aa68793..d8734aad60ab0c0f566a226747f52a7115f943a9 100644
+index 1babe6756b904fd2e5b2d62f6adfa153e3b772f1..67e1a3d3ab55022355e1c828da5f135a78df7dbe 100644
 --- a/src/main/java/net/minecraft/server/players/PlayerList.java
 +++ b/src/main/java/net/minecraft/server/players/PlayerList.java
 @@ -102,6 +102,7 @@ import net.minecraft.world.phys.Vec3;
@@ -357,7 +357,7 @@ index 1b1008ffd544dcddc31238e10c06df0d7aa68793..d8734aad60ab0c0f566a226747f52a71
  import org.slf4j.Logger;
  
  // CraftBukkit start
-@@ -971,6 +972,8 @@ public abstract class PlayerList {
+@@ -974,6 +975,8 @@ public abstract class PlayerList {
      }
  
      public void tick() {
@@ -592,7 +592,7 @@ index 330b21946564e6a7b463a258c02fee3f91e0f057..49567ceae3bb8409914caa836830e4ab
              // Paper start
              ItemStack tmp = itemstack.copy();
 diff --git a/src/main/java/org/bukkit/craftbukkit/entity/CraftLivingEntity.java b/src/main/java/org/bukkit/craftbukkit/entity/CraftLivingEntity.java
-index 9add2ba364e80815ec9c530b984e1619b6607bb8..9f3e0b5bddf3d933ae163ffe36dc490ae488d985 100644
+index a8568e16301f7fce4baea6942a02b9be94fe7ddc..7e62e61edf59080161764e0b31ad756ed682164f 100644
 --- a/src/main/java/org/bukkit/craftbukkit/entity/CraftLivingEntity.java
 +++ b/src/main/java/org/bukkit/craftbukkit/entity/CraftLivingEntity.java
 @@ -83,6 +83,7 @@ import org.bukkit.potion.PotionType;
@@ -603,7 +603,7 @@ index 9add2ba364e80815ec9c530b984e1619b6607bb8..9f3e0b5bddf3d933ae163ffe36dc490a
  
  public class CraftLivingEntity extends CraftEntity implements LivingEntity {
      private CraftEntityEquipment equipment;
-@@ -1201,4 +1202,19 @@ public class CraftLivingEntity extends CraftEntity implements LivingEntity {
+@@ -1175,4 +1176,19 @@ public class CraftLivingEntity extends CraftEntity implements LivingEntity {
          this.getHandle().setShouldBurnInDay(shouldBurnInDay);
      }
      // Purpur end - API for any mob to burn daylight

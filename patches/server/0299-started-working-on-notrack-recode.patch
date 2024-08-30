@@ -489,7 +489,7 @@ index 1c059f4698cfe944ab21cb62f9f3ccb7f7065e08..64ab836a8ba1b38754d98c4be4b7ef8c
      @Override
      public void addParticle(ParticleOptions parameters, double x, double y, double z, double velocityX, double velocityY, double velocityZ) {}
 diff --git a/src/main/java/net/minecraft/server/players/PlayerList.java b/src/main/java/net/minecraft/server/players/PlayerList.java
-index d8734aad60ab0c0f566a226747f52a7115f943a9..c63269a8a5d33e43a696b5d5e780df05c30fcac7 100644
+index 67e1a3d3ab55022355e1c828da5f135a78df7dbe..df802f0fad393d6cc564b9048e876af133f499d7 100644
 --- a/src/main/java/net/minecraft/server/players/PlayerList.java
 +++ b/src/main/java/net/minecraft/server/players/PlayerList.java
 @@ -1,6 +1,5 @@
@@ -517,7 +517,7 @@ index d8734aad60ab0c0f566a226747f52a7115f943a9..c63269a8a5d33e43a696b5d5e780df05
  // CraftBukkit end
  
  public abstract class PlayerList {
-@@ -1201,17 +1197,22 @@ public abstract class PlayerList {
+@@ -1204,17 +1200,22 @@ public abstract class PlayerList {
          return this.playersByName.get(name.toLowerCase(java.util.Locale.ROOT)); // Spigot
      }
  
