@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: izLoki <izLoki011@gmail.com>
+Date: Thu, 5 Sep 2024 21:46:57 -0300
+Subject: [PATCH] fix sound crash
+
+
+diff --git a/src/main/java/net/minecraft/world/level/Level.java b/src/main/java/net/minecraft/world/level/Level.java
+index 8f84750898b0072701e638407072fa624a8425f7..7131f8e99070d0f44dc7f8a944c8ba11f29dd415 100644
+--- a/src/main/java/net/minecraft/world/level/Level.java
++++ b/src/main/java/net/minecraft/world/level/Level.java
+@@ -1356,6 +1356,22 @@ public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedl
+ 
+     public abstract void playSeededSound(@Nullable Entity source, Entity entity, Holder<SoundEvent> sound, SoundSource category, float volume, float pitch, long seed);
+ 
++    public void playSound(@Nullable Player source, double x, double y, double z, SoundEvent sound, SoundSource category) {
++        this.playSound(source, x, y, z, sound, category, 1.0F, 1.0F);
++    }
++
++    public void playSound(@Nullable Player source, double x, double y, double z, SoundEvent sound, SoundSource category, float volume, float pitch) {
++        this.playSeededSound(source, x, y, z, sound, category, volume, pitch, this.threadSafeRandom.nextLong());
++    }
++
++    public void playSound(@Nullable Player source, double x, double y, double z, Holder<SoundEvent> sound, SoundSource category, float volume, float pitch) {
++        this.playSeededSound(source, x, y, z, sound, category, volume, pitch, this.threadSafeRandom.nextLong());
++    }
++
++    public void playSound(@Nullable Player source, Entity entity, SoundEvent sound, SoundSource category, float volume, float pitch) {
++        this.playSeededSound(source, entity, BuiltInRegistries.SOUND_EVENT.wrapAsHolder(sound), category, volume, pitch, this.threadSafeRandom.nextLong());
++    }
++
+     public void playSound(@Nullable Entity source, double x, double y, double z, SoundEvent sound, SoundSource category) {
+         this.playSound(source, x, y, z, sound, category, 1.0F, 1.0F);
+     }

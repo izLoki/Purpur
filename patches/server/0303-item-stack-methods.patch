@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: izLoki <izLoki011@gmail.com>
+Date: Thu, 5 Sep 2024 13:46:26 -0300
+Subject: [PATCH] item stack methods
+
+
+diff --git a/src/main/java/org/bukkit/craftbukkit/inventory/CraftItemStack.java b/src/main/java/org/bukkit/craftbukkit/inventory/CraftItemStack.java
+index 40fb5b5e00f6bc82e67d318b8b3d1e7606973f52..5414f899df026d933e5358e8557e60befa9a56aa 100644
+--- a/src/main/java/org/bukkit/craftbukkit/inventory/CraftItemStack.java
++++ b/src/main/java/org/bukkit/craftbukkit/inventory/CraftItemStack.java
+@@ -8,6 +8,7 @@ import net.minecraft.core.component.DataComponentPatch;
+ import net.minecraft.core.component.DataComponents;
+ import net.minecraft.world.item.Item;
+ import net.minecraft.world.item.Items;
++import net.minecraft.world.item.component.ItemAttributeModifiers;
+ import net.minecraft.world.item.enchantment.EnchantmentHelper;
+ import net.minecraft.world.item.enchantment.ItemEnchantments;
+ import org.bukkit.Material;
+@@ -543,4 +544,16 @@ public final class CraftItemStack extends ItemStack {
+         return this.pdcView;
+     }
+     // Paper end - pdc
++
++    //Prisma start
++
++    public void setShowTooltip(boolean showTooltip) {
++        ItemAttributeModifiers modifiers = this.handle.get(DataComponents.ATTRIBUTE_MODIFIERS);
++        if (modifiers == null) {
++            modifiers = net.minecraft.world.item.component.ItemAttributeModifiers.EMPTY;
++        }
++        this.handle.set(DataComponents.ATTRIBUTE_MODIFIERS, modifiers.withTooltip(showTooltip));
++    }
++
++    //Prisma end
+ }
+diff --git a/src/main/java/org/bukkit/craftbukkit/inventory/CraftMetaItem.java b/src/main/java/org/bukkit/craftbukkit/inventory/CraftMetaItem.java
+index 5c45946f54e4b16440c15a9165ef85be43e53c84..7c1156be48923a6dec946b47fd65252d5fba58d4 100644
+--- a/src/main/java/org/bukkit/craftbukkit/inventory/CraftMetaItem.java
++++ b/src/main/java/org/bukkit/craftbukkit/inventory/CraftMetaItem.java
+@@ -5,8 +5,8 @@ import com.google.common.base.Strings;
+ import com.google.common.collect.ImmutableList;
+ import com.google.common.collect.ImmutableMap;
+ import com.google.common.collect.ImmutableMultimap;
++import com.google.common.collect.ImmutableSortedMap;
+ import com.google.common.collect.LinkedHashMultimap;
+-import com.google.common.collect.ImmutableSortedMap; // Paper
+ import com.google.common.collect.Lists;
+ import com.google.common.collect.Multimap;
+ import com.google.common.collect.SetMultimap;
+@@ -20,11 +20,10 @@ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+ import java.lang.annotation.Target;
+ import java.util.ArrayList;
+-import java.util.Arrays;
+ import java.util.Base64;
+ import java.util.Collection;
+ import java.util.Collections;
+-import java.util.Comparator; // Paper
++import java.util.Comparator;
+ import java.util.EnumSet;
+ import java.util.HashMap;
+ import java.util.Iterator;
